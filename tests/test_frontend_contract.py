@@ -1,0 +1,49 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_note_ui_is_continuous_editor_with_collapsed_rounds():
+    html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+    javascript = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="noteFinal"' in html
+    assert 'id="clearNoteFinal"' in html
+    assert 'id="roundsList"' in html
+    assert 'id="roundInspector"' in html
+    assert 'id="inspectorAsr"' not in html
+    assert html.count('id="inspectorPolished"') == 1
+    assert "max-height: calc(36px * 3)" in html
+    assert 'id="turns"' not in html
+    assert "Apply polish" not in html
+    assert "incomingPane" not in html
+    assert javascript.count("createElement(\"textarea\")") == 0
+    assert "inspectorAsr" not in javascript
+    assert "/api/notes/${state.selectedId}/turns" in javascript
+    assert "/api/notes/${state.note.id}/turns/${turnId}" in javascript
+    assert "flushFinalSave()" in javascript
+    assert "flushTurnSaves()" in javascript
+    assert "pinnedRoundId" in javascript
+    assert "visibleHistory" in javascript
+    assert "Copy note" in html
+    assert ">Clear</button>" in html
+    assert "clearContinuousNote" in javascript
+    assert "Lecture" in html
+    start = javascript.split("async function startRecording", 1)[1]
+    assert start.index("SpeechCapture.open") < start.index("prepareRecordingTarget")
+    assert "forceNew" in javascript
+    assert "isFreshLecture" in javascript
+    assert 'bootParams.get("record")' in javascript
+    assert "LECTURE_MAX" in javascript
+    assert "Stopped after 2 hours" in javascript
+    assert 'id="draftQuestion"' in html
+    assert 'id="questionOut"' in html
+    assert "/api/sessions/${id}/questions" in javascript
+    assert "window.close()" not in javascript
+    assert "base_revision: baseRevision" in javascript
+    assert "recorder.start(5000)" in javascript
+    assert "speech-microphone" in javascript
+    assert "SpeechRecovery.remove" in javascript
+    assert "overflow: hidden" in html
+    assert "position: sticky" in html

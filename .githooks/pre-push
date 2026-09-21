@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ "$local_ref" != refs/heads/main ] || [ "$remote_ref" != refs/heads/main ]; then
+    echo 'Blocked: only reviewed main-to-main publication is allowed. Legacy branches and tags stay local.' >&2
+    exit 1
+  fi
+  case "$local_sha" in
+    0000000000000000000000000000000000000000) continue ;;
+  esac
+  python3 scripts/privacy-check.py --history "$local_sha"
+done

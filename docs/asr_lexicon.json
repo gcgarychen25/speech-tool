@@ -1,0 +1,20 @@
+{
+  "source": "Generic technical examples; use the ignored local glossary for personal corrections.",
+  "entries": [
+    {
+      "heard": "Kuda",
+      "intended": "CUDA",
+      "course": "gpu"
+    },
+    {
+      "heard": "Deep Seak",
+      "intended": "DeepSeek",
+      "course": "models"
+    },
+    {
+      "heard": "tensor RT",
+      "intended": "TensorRT",
+      "course": "gpu"
+    }
+  ]
+}

@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Speech</title>
+  <style>
+    :root {
+      --bg: #f7f7f8;
+      --side: #efeff1;
+      --card: #fff;
+      --ink: #0d0d0d;
+      --muted: #8e8e93;
+      --line: rgba(0,0,0,.08);
+      --live: #ff3b30;
+      --sel: #e8e8ed;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
+    }
+    button, textarea, input { font: inherit; }
+    .shell { display: grid; grid-template-columns: 260px minmax(0, 1fr); height: 100%; }
+    aside {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      padding: 14px 10px;
+      background: var(--side);
+    }
+    .side-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 8px 12px;
+    }
+    .side-top h1 { margin: 0; font-size: 13px; font-weight: 600; color: #3a3a3c; }
+    #newItem {
+      width: 28px;
+      height: 28px;
+      border: 0;
+      border-radius: 8px;
+      background: var(--card);
+      box-shadow: 0 1px 2px rgba(0,0,0,.06);
+      cursor: pointer;
+      font-size: 18px;
+    }
+    #history { overflow: auto; flex: 1; }
+    .hist {
+      position: relative;
+      width: 100%;
+      margin-bottom: 2px;
+      padding: 10px 28px 10px 12px;
+      border: 0;
+      border-radius: 12px;
+      background: transparent;
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+    .hist-del {
+      position: absolute;
+      top: 8px;
+      right: 6px;
+      width: 22px;
+      height: 22px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .hist-del:hover { background: var(--sel); color: var(--ink); }
+    .hist:hover { background: rgba(255,255,255,.55); }
+    .hist.active { background: var(--card); box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+    .hist .when { display: block; font-size: 13px; font-weight: 500; }
+    .hist .meta { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); }
+    .hist .meta.fail { color: var(--live); }
+    .empty { padding: 12px; color: var(--muted); font-size: 13px; }
+    main {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      padding: 12px 0;
+    }
+    .composer {
+      width: min(760px, calc(100% - 40px));
+      flex: 1;
+      min-height: 0;
+      max-height: 100%;
+      margin: 0 auto;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--card);
+      box-shadow: 0 8px 30px rgba(0,0,0,.06);
+      display: flex;
+      flex-direction: column;
+    }
+    .modes {
+      display: flex;
+      gap: 4px;
+      width: fit-content;
+      margin-bottom: 12px;
+      padding: 3px;
+      border-radius: 12px;
+      background: var(--sel);
+      flex-shrink: 0;
+    }
+    .mode {
+      padding: 7px 12px;
+      border: 0;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .mode.on { background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+    .workspace { flex: 1; min-height: 0; overflow: auto; }
+    #lectureWorkspace { display: none; flex-direction: column; }
+    .final-field {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fcfcfc;
+    }
+    #noteFinal {
+      width: 100%;
+      min-height: 240px;
+      max-height: 55vh;
+      margin-top: 4px;
+      border: 0;
+      resize: none;
+      outline: none;
+      background: transparent;
+      color: var(--ink);
+      font: 400 16px/1.55 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+    }
+    .rounds-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 14px 2px 6px;
+    }
+    .rounds-head h2 { margin: 0; font-size: 13px; font-weight: 600; }
+    #roundsList {
+      max-height: calc(36px * 3);
+      overflow: auto;
+    }
+    .round-row {
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      width: 100%;
+      min-height: 36px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 10px;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+    .round-row:hover, .round-row.active { background: var(--sel); }
+    .round-number { font-size: 12px; font-weight: 600; }
+    .round-preview {
+      min-width: 0;
+      overflow: hidden;
+      color: #3a3a3c;
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .round-status { color: var(--muted); font-size: 11px; }
+    #roundInspector {
+      display: none;
+      margin-top: 8px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fafafa;
+    }
+    #roundInspector.on { display: block; }
+    #inspectorPolished {
+      width: 100%;
+      min-height: 76px;
+      max-height: 22vh;
+      margin-top: 4px;
+      border: 0;
+      resize: none;
+      outline: none;
+      background: transparent;
+      color: var(--ink);
+      font: 400 14px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+    }
+    .turn {
+      margin-bottom: 14px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fcfcfc;
+    }
+    .turn-head, .field-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .turn-head { margin-bottom: 10px; }
+    .turn-title { font-size: 13px; font-weight: 600; }
+    .turn-meta, .field-label, .status { color: var(--muted); font-size: 12px; }
+    .field { padding-top: 8px; }
+    .field + .field { margin-top: 10px; border-top: 1px solid var(--line); }
+    .field-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .branch-copy {
+      padding: 3px 0;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .branch-copy:disabled { opacity: .35; cursor: default; }
+    .turn textarea, #listenerNotes, #lectureDraft, #lecturePolished, #questionOut {
+      width: 100%;
+      min-height: 76px;
+      max-height: 22vh;
+      margin-top: 4px;
+      border: 0;
+      resize: none;
+      outline: none;
+      overflow: auto;
+      background: transparent;
+      color: var(--ink);
+      font: 400 15px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+    }
+    #listenerNotes { min-height: 240px; max-height: 55vh; resize: vertical; }
+    #listenerNotes:focus-visible { outline: 2px solid #477d62; outline-offset: 3px; }
+    .lecture-field > summary { cursor: pointer; color: #52645b; padding: 4px; }
+    #questionOptions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 6px 0; font-size: 13px; }
+    #questionMode { padding: 5px; border: 1px solid var(--line); border-radius: 6px; background: white; color: var(--ink); }
+    #questionOut { min-height: 64px; max-height: 12vh; }
+    #questionStatus { margin: 8px 0; font-size: 13px; color: var(--ink); }
+    #questionStatus[data-state="error"] { color: #a52a20; }
+    #questionStatus[data-state="loading"]::before { content: "◌ "; }
+    #questionSuggestion { padding: 10px; margin-top: 10px; border-left: 3px solid #477d62; background: #f1f6f2; border-radius: 6px; }
+    #suggestedQuestion { white-space: pre-wrap; font-size: 15px; line-height: 1.5; margin: 8px 0; }
+    #questionCoach :focus-visible { outline: 2px solid #477d62; outline-offset: 3px; }
+    #questionCoach .branch-copy { color: #365d4b; padding: 6px 8px; }
+    #questionCoach .field-label { color: #62676c; }
+    #questionCoach textarea::placeholder, #questionCoach input::placeholder { color: #70757a; }
+    #questionCoach [hidden] { display: none; }
+    #questionRefine {
+      width: 100%;
+      margin-top: 6px;
+      padding: 6px 2px 2px;
+      border: 0;
+      border-top: 1px solid var(--line);
+      outline: none;
+      background: transparent;
+      color: var(--ink);
+      font-size: 13px;
+    }
+    textarea::placeholder, input::placeholder { color: #c7c7cc; }
+    textarea:disabled { color: var(--muted); }
+    .lecture-field { margin-bottom: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 14px; }
+    #course {
+      width: 100%;
+      margin-bottom: 10px;
+      padding: 6px 4px;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      outline: none;
+      background: transparent;
+      font-size: 13px;
+    }
+    .status { min-height: 18px; padding: 8px 6px 4px; flex-shrink: 0; }
+    #captureControls { flex-shrink: 0; margin: 8px 0 0; font-size: 12px; }
+    #captureControls .status { margin: 4px 0 0; padding: 0; min-height: 0; }
+    #captureNotice:empty { display: none; }
+    #audioMeters { display: flex; gap: 16px; margin-top: 8px; flex-wrap: wrap; }
+    .dock {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      flex-shrink: 0;
+      position: sticky;
+      bottom: 0;
+      z-index: 2;
+      padding: 10px 0 4px;
+      background: var(--card);
+    }
+    .action {
+      padding: 8px 12px;
+      border: 0;
+      border-radius: 999px;
+      background: var(--sel);
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .action:disabled { opacity: .35; cursor: default; }
+    #discard { background: transparent; color: var(--muted); }
+    #discard:disabled { opacity: 0; }
+    .rec {
+      position: relative;
+      width: 44px;
+      height: 44px;
+      border: 0;
+      border-radius: 50%;
+      background: var(--ink);
+      box-shadow: 0 4px 14px rgba(0,0,0,.16);
+      cursor: pointer;
+    }
+    .rec .dot { position: absolute; inset: 13px; border-radius: 50%; background: var(--live); }
+    .rec.live { border-radius: 12px; background: var(--live); }
+    .rec.live .dot { inset: 14px; border-radius: 4px; background: #fff; }
+    .timer { min-width: 72px; color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+    [hidden] { display: none !important; }
+    button { transition: background-color .15s, color .15s; }
+    button:focus-visible, summary:focus-visible, select:focus-visible {
+      outline: 2px solid #55556a; outline-offset: 3px;
+    }
+    .branch-copy {
+      appearance: none; padding: 6px 10px; border: 1px solid var(--line);
+      border-radius: 8px; background: var(--card); color: #414148;
+      font-size: 12px; font-weight: 500; line-height: 1.35; cursor: pointer;
+    }
+    .branch-copy:hover:not(:disabled) { background: var(--sel); color: var(--ink); }
+    .branch-copy:disabled { opacity: .45; cursor: default; }
+    .health-panel {
+      flex-shrink: 0; margin: 0 0 12px; padding: 10px 12px;
+      border: 1px solid var(--line); border-radius: 12px; background: #fafafa;
+    }
+    .health-panel strong { display: block; font-size: 12px; font-weight: 600; }
+    .health-panel p { margin: 5px 0 0; color: #64646d; font-size: 12px; line-height: 1.5; }
+    .health-panel[data-attention="true"] { border-color: #e4d9c2; background: #fcfaf5; }
+    .health-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .health-actions:has(> :not([hidden])) { min-height: 28px; }
+    #recoveryPanel { border-color: #dcdce5; }
+    #cleanupSummary { color: #64646d; font-size: 12px; line-height: 1.5; }
+    @media (max-width: 700px) {
+      .shell { grid-template-columns: 150px minmax(0, 1fr); }
+      .composer { width: calc(100% - 16px); padding: 10px; }
+      .field-head, .field-actions { flex-wrap: wrap; gap: 6px; }
+    }
+    @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <div class="side-top">
+        <h1>History</h1>
+        <button id="newItem" type="button" title="New">+</button>
+      </div>
+      <div id="history"></div>
+    </aside>
+    <main>
+      <div class="composer">
+        <div class="modes">
+          <button class="mode on" id="modeNote" type="button">Note</button>
+          <button class="mode" id="modeLecture" type="button">Lecture</button>
+        </div>
+        <section class="workspace" id="noteWorkspace">
+          <div class="final-field">
+            <div class="field-head">
+              <span class="field-label">Continuous note</span>
+              <span class="field-actions">
+                <span class="field-label" id="finalState">Saved</span>
+                <button class="branch-copy" id="clearNoteFinal" type="button" disabled>Clear</button>
+              </span>
+            </div>
+            <textarea id="noteFinal" placeholder="Press Record to add the first turn."></textarea>
+          </div>
+          <div class="rounds-head">
+            <h2 id="roundsTitle">Rounds</h2>
+            <span class="field-label">Newest at the bottom · latest polish below</span>
+          </div>
+          <div id="roundsList"></div>
+          <div id="roundInspector">
+            <div class="turn-head">
+              <span class="turn-title" id="inspectorTitle">Latest polish</span>
+              <span class="turn-meta" id="inspectorMeta"></span>
+            </div>
+            <div class="field">
+              <div class="field-head">
+                <span class="field-label">Polished draft</span>
+                <span>
+                  <button class="branch-copy" id="retryInspectorPolish" type="button" hidden>Retry polish</button>
+                  <button class="branch-copy" id="copyInspectorPolished" type="button">Copy</button>
+                </span>
+              </div>
+              <textarea id="inspectorPolished" placeholder="Polishing…"></textarea>
+            </div>
+          </div>
+        </section>
+        <section class="workspace" id="lectureWorkspace">
+          <input id="course" list="courses" placeholder="Course (choose once per lecture)" autocomplete="off" />
+          <datalist id="courses"><option value="CS 5777 / CS 4787"><option value="CS 5470"><option value="CS 5416 / CS 4414"><option value="CS 6758"><option value="CS 5672"><option value="Marin"></datalist>
+          <div class="health-panel" id="lectureHealth" role="status" aria-live="polite">
+            <strong id="lectureHealthTitle">Ready to record</strong>
+            <p id="lectureHealthDetail">Audio is saved before transcription. AI cleanup is optional.</p>
+            <div class="health-actions">
+              <button class="branch-copy" id="retryTranscription" type="button" hidden>Retry transcription</button>
+              <button class="branch-copy" id="retryCleanup" type="button" hidden>Retry cleanup</button>
+            </div>
+          </div>
+          <div class="health-panel" id="recoveryPanel" hidden role="status" aria-live="polite">
+            <strong>Audio saved on this device</strong>
+            <p id="recoveryStatus"></p>
+            <div class="health-actions"><button class="branch-copy" id="recoverAudio" type="button" hidden>Recover audio</button></div>
+          </div>
+          <div class="lecture-field">
+            <div class="field-head"><label class="field-label" for="listenerNotes">Your lecture notes · saved automatically</label><button class="branch-copy" id="stamp" type="button">Stamp time</button></div>
+            <textarea id="listenerNotes" placeholder="Take notes here. ⌘⇧Q inserts a timestamp. Select a thought and press ⌘Enter to polish its wording; your notes stay unchanged."></textarea>
+          </div>
+          <div class="lecture-field" id="questionCoach">
+            <div class="field-head">
+              <label class="field-label" for="questionOut">Your question · ask in class</label>
+              <span class="field-actions">
+                <button class="branch-copy" id="draftQuestion" type="button">Polish wording</button>
+                <button class="branch-copy" id="copyQuestion" type="button" disabled>Copy</button>
+              </span>
+            </div>
+            <textarea id="questionOut" placeholder="What are you unsure about? Type here, then ⌘Enter. Your wording stays yours."></textarea>
+            <input id="questionRefine" aria-label="Refinement instruction" placeholder="Optional: shorter, explain the missing link, keep my terminology…" autocomplete="off" />
+            <div id="questionOptions">
+              <label>Task <select id="questionMode"><option value="polish">Polish wording only</option><option value="explore">Explore my question</option></select></label>
+              <label><input type="checkbox" id="questionContext" /> Use lecture context</label>
+            </div>
+            <p id="questionStatus" role="status" aria-live="polite">Uses your question first, or the selected note. Only transcribed audio is available.</p>
+            <button class="branch-copy" id="useSelectedNote" type="button">Use selected note</button>
+            <button class="branch-copy" id="stopQuestion" type="button" hidden>Stop waiting</button>
+            <div id="questionSuggestion" hidden>
+              <span class="field-label" id="suggestionLabel">Suggested wording</span>
+              <p id="suggestedQuestion"></p>
+              <button class="branch-copy" id="useQuestion" type="button">Use this wording</button>
+              <button class="branch-copy" id="copySuggestion" type="button">Copy suggestion</button>
+            </div>
+          </div>
+          <details class="lecture-field" id="transcriptDetails">
+            <summary>Lecture transcript · expand when needed</summary>
+            <textarea id="lectureDraft" placeholder="Lecture chunks appear here."></textarea>
+          </details>
+          <details class="lecture-field" id="polishedDetails">
+            <summary>AI-cleaned transcript · optional</summary>
+            <p id="cleanupSummary">Original text remains available if cleanup needs a retry.</p>
+            <div class="field-head">
+              <span class="field-label">Polished from ASR</span>
+              <button class="branch-copy" id="retryLecturePolish" type="button" hidden>Retry polish</button>
+            </div>
+            <textarea id="lecturePolished" readonly placeholder="Polishing…"></textarea>
+          </details>
+        </section>
+        <div class="lecture-field" id="captureControls">
+          <label for="audioSource">Audio source</label>
+          <select id="audioSource" class="branch-copy">
+            <option value="microphone">Microphone · classroom</option>
+            <option value="meeting">Meeting audio + microphone</option>
+          </select>
+          <p id="captureHint" class="status"></p>
+          <div id="audioMeters" hidden>
+            <label>Microphone <meter id="micLevel" min="0" max="1" value="0"></meter></label>
+            <label id="meetingMeterLabel">Meeting <meter id="meetingLevel" min="0" max="1" value="0"></meter></label>
+          </div>
+          <p id="captureNotice" class="status" role="status"></p>
+        </div>
+        <p class="status" id="status"></p>
+        <div class="dock">
+          <button class="action" id="discard" type="button" disabled>Discard</button>
+          <button class="rec" id="record" type="button" aria-label="Record"><span class="dot"></span></button>
+          <button class="action" id="copyNote" type="button" disabled>Copy note</button>
+          <span class="timer" id="timer">00:00</span>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="/assets/recovery.js?v=1"></script>
+  <script src="/assets/capture.js?v=1"></script>
+  <script src="/assets/app.js?v=21"></script>
+</body>
+</html>
