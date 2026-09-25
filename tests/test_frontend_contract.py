@@ -26,6 +26,8 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "flushTurnSaves()" in javascript
     assert "pinnedRoundId" in javascript
     assert "visibleHistory" in javascript
+    assert "cleanup unavailable" in javascript or "AI cleanup unavailable" in javascript
+    assert "cleanup_provider_available" in javascript
     assert "Copy note" in html
     assert ">Clear</button>" in html
     assert "clearContinuousNote" in javascript

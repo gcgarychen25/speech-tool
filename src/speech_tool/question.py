@@ -99,10 +99,17 @@ def draft_question(
         build_question_prompt(confusion, lecture, memory, prior_question, refine, mode),
         QUESTION_TIMEOUT_SECONDS,
     )
-    if result.version in {"timeout", "error", "empty"} or not result.text.strip():
+    if result.version in {
+        "timeout",
+        "error",
+        "empty",
+        "provider_unavailable",
+        "model_unavailable",
+    } or not result.text.strip():
         return PolishResult(
             text="",
             model=result.model or OPENCODE_MODEL,
             version=result.version or "empty",
+            detail=result.detail,
         )
     return result

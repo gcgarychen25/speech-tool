@@ -12,6 +12,9 @@ from speech_tool.asr import AsrBackend, MlxWhisperAsr, default_asr
 from speech_tool.config import (
     LECTURE_CHUNK_SECONDS,
     LECTURE_POLISH_TIMEOUT_SECONDS,
+    OPENCODE_MODEL,
+    POLISH_PROVIDER_COOLDOWN_SECONDS,
+    POLISH_PROVIDER_FAILURE_STREAK,
     POLISH_RETRY_LIMIT,
     POLISH_TIMEOUT_SECONDS,
 )
@@ -23,7 +26,21 @@ from speech_tool.polish_quality import polish_quality_issue
 
 NOTE_POLISH_PRIORITY = 0
 LECTURE_POLISH_PRIORITY = 1
-SOFT_POLISH_FAILURES = {"timeout", "error", "empty", "quality_rejected"}
+SOFT_POLISH_FAILURES = {
+    "timeout",
+    "error",
+    "empty",
+    "quality_rejected",
+    "provider_unavailable",
+    "model_unavailable",
+}
+PROVIDER_POLISH_FAILURES = {
+    "timeout",
+    "error",
+    "empty",
+    "provider_unavailable",
+    "model_unavailable",
+}
 
 
 class CaptureConflict(ValueError):
@@ -53,8 +70,40 @@ class Pipeline:
         self._polish_priority: dict[str, int] = {}
         self._asr_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="asr")
         self._polish_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="polish")
+        self._polish_fail_streak = 0
+        self._polish_cooldown_until = 0.0
+        self._polish_provider_detail: str | None = None
         if auto_start:
             self.recover_and_resume()
+
+    def polish_provider_status(self) -> dict:
+        remaining = max(0.0, self._polish_cooldown_until - time.monotonic())
+        return {
+            "available": remaining <= 0,
+            "cooldown_remaining_seconds": int(remaining),
+            "consecutive_failures": self._polish_fail_streak,
+            "last_detail": self._polish_provider_detail,
+            "model": OPENCODE_MODEL,
+        }
+
+    def clear_polish_cooldown(self) -> None:
+        self._polish_fail_streak = 0
+        self._polish_cooldown_until = 0.0
+
+    def _note_polish_outcome(self, version: str | None, detail: str | None) -> None:
+        if version in PROVIDER_POLISH_FAILURES:
+            self._polish_fail_streak += 1
+            self._polish_provider_detail = detail or (
+                f"AI cleanup failed ({version}); raw transcript preserved"
+            )
+            if self._polish_fail_streak >= max(POLISH_PROVIDER_FAILURE_STREAK, 1):
+                self._polish_cooldown_until = (
+                    time.monotonic() + max(POLISH_PROVIDER_COOLDOWN_SECONDS, 0)
+                )
+            return
+        if version and version not in SOFT_POLISH_FAILURES:
+            self.clear_polish_cooldown()
+            self._polish_provider_detail = None
 
     def ingest_audio(
         self,
@@ -174,6 +223,7 @@ class Pipeline:
         event = self.store.get(event_id)
         if not self.store.read_raw_transcript(event_id):
             raise RuntimeError("Raw transcript missing; run ASR first")
+        self.clear_polish_cooldown()
         self._update_event(event_id, polish_status="pending", last_error=None)
         self.enqueue_polish(event_id)
 
@@ -370,6 +420,26 @@ class Pipeline:
                 polish_status="running",
                 last_error=None,
             )
+        if time.monotonic() < self._polish_cooldown_until:
+            detail = self._polish_provider_detail or (
+                "AI cleanup paused after repeated provider failures; raw transcript preserved"
+            )
+            logging.getLogger(__name__).warning(
+                "polish event=%s skipped cooldown remaining=%.0fs",
+                event_id,
+                self._polish_cooldown_until - time.monotonic(),
+            )
+            with self._commit_lock:
+                event = self.store.get(event_id)
+                if event.transcript_revision != revision:
+                    return
+                self._update_event(
+                    event_id,
+                    polish_status="failed",
+                    lm_version="provider_unavailable",
+                    last_error=detail,
+                )
+            return
         result = None
         last_error = None
         attempts = 1 + max(POLISH_RETRY_LIMIT, 0)
@@ -397,16 +467,28 @@ class Pipeline:
                     event_id, attempt + 1, time.monotonic() - started,
                     result.version if result else 'exception',
                 )
+        detail = None
+        if result is not None:
+            detail = getattr(result, "detail", None)
+            self._note_polish_outcome(result.version, detail)
+        elif last_error is not None:
+            self._note_polish_outcome("error", str(last_error))
         with self._commit_lock:
             event = self.store.get(event_id)
             if event.transcript_revision != revision:
                 return
             if result is None or result.version in SOFT_POLISH_FAILURES:
+                message = (
+                    str(last_error)
+                    if last_error
+                    else detail
+                    or f"Polish {result.version if result else 'failed'}; raw transcript preserved"
+                )
                 self._update_event(
                     event_id,
                     polish_status="failed",
                     lm_version=result.version if result else "error",
-                    last_error=str(last_error) if last_error else f"Polish {result.version if result else 'failed'}; raw transcript preserved",
+                    last_error=message,
                 )
                 return
             self.store.write_polished_transcript(event_id, result.text)

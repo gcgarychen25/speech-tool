@@ -61,8 +61,13 @@ Default ASR is `mlx-community/whisper-small-mlx`. Optional:
 
 ```bash
 export SPEECH_TOOL_ASR_MODEL=mlx-community/whisper-tiny-mlx   # faster, worse quality
-export SPEECH_TOOL_OPENCODE_MODEL=opencode/mimo-v2.5-free
+export SPEECH_TOOL_OPENCODE_MODEL=opencode/mimo-v2.6-flash-free
 ```
+
+Default cleanup uses OpenCode. Free-tier models may refuse non-interactive CLI
+calls; when that happens the UI keeps the raw transcript and reports cleanup as
+unavailable instead of looking hung. Override the model or provider credentials
+locally if cleanup must stay enabled.
 
 ## Late-to-lecture
 

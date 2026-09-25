@@ -131,6 +131,8 @@ class SessionView(BaseModel):
     polish_available: bool = False
     polish_ready: bool = False
     polish_skipped: bool = False
+    cleanup_provider_available: bool = True
+    cleanup_provider_detail: Optional[str] = None
     display_text: Optional[str] = None
     raw_transcript: Optional[str] = None
     polished_transcript: Optional[str] = None
@@ -198,7 +200,13 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
         polish_available = bool(
             event.asr_status == "completed"
             and event.polish_status == "completed"
-            and event.lm_version not in {"timeout", "error", "empty"}
+            and event.lm_version not in {
+                "timeout",
+                "error",
+                "empty",
+                "provider_unavailable",
+                "model_unavailable",
+            }
             and current_polished
         )
         polish_ready = bool(
@@ -243,7 +251,14 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
         polished = store.current_polished_transcript(event_id)
         polish_available = bool(
             event.polish_status == "completed"
-            and event.lm_version not in {"timeout", "error", "empty"}
+            and event.lm_version
+            not in {
+                "timeout",
+                "error",
+                "empty",
+                "provider_unavailable",
+                "model_unavailable",
+            }
             and polished is not None
         )
         return NoteTurnView(
@@ -387,12 +402,21 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             polish_status == "completed"
             and polished_text
             and all(
-                e.lm_version not in {"timeout", "error", "empty"} for e in chunks
+                e.lm_version
+                not in {
+                    "timeout",
+                    "error",
+                    "empty",
+                    "provider_unavailable",
+                    "model_unavailable",
+                }
+                for e in chunks
             )
         )
         polish_ready = bool(
             polish_available and polished_text.strip() != raw_text.strip()
         )
+        provider = pipe.polish_provider_status()
         next_index = max(indices, default=-1) + 1
         expected = max(session.expected_chunk_count, next_index)
         present = set(indices)
@@ -411,6 +435,8 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             polish_available=polish_available,
             polish_ready=polish_ready,
             polish_skipped=bool(cleanup_failed),
+            cleanup_provider_available=bool(provider.get("available", True)),
+            cleanup_provider_detail=provider.get("last_detail"),
             transcribed_chunks=transcribed,
             empty_transcript_chunks=empty_transcript,
             transcription_pending_chunks=transcription_pending,
@@ -443,7 +469,14 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
 
     @app.get("/api/health")
     def health():
-        return {"ok": True, "app": "speech-tool", "protocol": 2, "audio_archive_protocol": 1}
+        polish = pipe.polish_provider_status()
+        return {
+            "ok": True,
+            "app": "speech-tool",
+            "protocol": 2,
+            "audio_archive_protocol": 1,
+            "polish": polish,
+        }
 
     @app.get("/api/notes")
     def list_notes():
@@ -680,11 +713,27 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
         except Exception:
             logger.warning("question failed request=%s elapsed=%.2f", request_id, time.monotonic() - started)
             raise HTTPException(502, f"Question generation failed (reference {request_id})")
-        if result.version in {"timeout", "error", "empty"} or not result.text.strip():
+        if result.version in {
+            "timeout",
+            "error",
+            "empty",
+            "provider_unavailable",
+            "model_unavailable",
+        } or not result.text.strip():
             logger.warning("question %s request=%s elapsed=%.2f model=%s", result.version, request_id, time.monotonic() - started, result.model)
+            provider_down = result.version in {"provider_unavailable", "model_unavailable"}
             raise HTTPException(
                 504 if result.version == "timeout" else 502,
-                f"{'AI took too long' if result.version == 'timeout' else 'AI did not return a usable question'} (reference {request_id})",
+                (
+                    "AI cleanup provider is unavailable right now"
+                    if provider_down
+                    else (
+                        "AI took too long"
+                        if result.version == "timeout"
+                        else "AI did not return a usable question"
+                    )
+                )
+                + f" (reference {request_id})",
             )
         logger.warning("question ready request=%s elapsed=%.2f model=%s", request_id, time.monotonic() - started, result.model)
         return store.append_question(

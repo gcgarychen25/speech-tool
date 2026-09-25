@@ -127,16 +127,26 @@ async function api(url, options) {
 function turnStatus(turn) {
   if (turn.asr_status === "failed") return "transcription failed";
   if (turn.asr_status !== "completed") return "transcribing";
-  if (turn.polish_status === "failed") return "transcript saved · cleanup needs retry";
+  if (turn.polish_status === "failed") {
+    return turn.lm_version === "provider_unavailable" || turn.lm_version === "model_unavailable"
+      ? "transcript saved · cleanup unavailable"
+      : "transcript saved · cleanup needs retry";
+  }
   if (["pending", "running"].includes(turn.polish_status)) return "polishing";
-  if (["timeout", "error", "empty"].includes(turn.lm_version)) return "polish skipped";
+  if (["timeout", "error", "empty", "provider_unavailable", "model_unavailable"].includes(turn.lm_version)) {
+    return "polish skipped";
+  }
   return "ready";
 }
 function itemStatus(item) {
   if (item.kind === 'session') {
     if (item.missing_chunk_indices?.length) return `${item.missing_chunk_indices.length} audio gap · review`;
     if (item.asr_failed_chunks) return 'audio saved · transcription needs retry';
-    if (item.cleanup_failed_chunks) return 'transcript saved · cleanup needs review';
+    if (item.cleanup_failed_chunks) {
+      return item.cleanup_provider_available === false
+        ? 'transcript saved · cleanup unavailable'
+        : 'transcript saved · cleanup needs review';
+    }
     if (item.transcription_pending_chunks) return 'audio saved · transcribing';
     if (item.empty_transcript_chunks) return 'some parts have no detected speech';
     if (item.cleanup_pending_chunks) return 'transcript saved · cleaning up';
@@ -405,7 +415,7 @@ function updateInspectorFields(detail, isLatest) {
     }
   }
   copyInspectorPolished.disabled = !inspectorPolished.value;
-  retryInspectorPolish.hidden = !["timeout", "error", "empty"].includes(detail.lm_version);
+  retryInspectorPolish.hidden = !["timeout", "error", "empty", "provider_unavailable", "model_unavailable"].includes(detail.lm_version);
 }
 async function showRoundPolish(turnId) {
   if (!state.note || !turnId) return;
@@ -1028,10 +1038,12 @@ function renderLectureHealth(detail) {
   const failed = detail.asr_failed_chunks || 0;
   const cleanup = detail.cleanup_failed_chunks || 0;
   const duplicate = detail.duplicate_chunk_indices || [];
-  el('lectureHealth').dataset.attention = Boolean(missing.length || failed || cleanup || duplicate.length || detail.empty_transcript_chunks);
+  const providerDown = detail.cleanup_provider_available === false;
+  el('lectureHealth').dataset.attention = Boolean(missing.length || failed || cleanup || duplicate.length || detail.empty_transcript_chunks || providerDown);
   el('lectureHealthTitle').textContent = !detail.chunk_count ? 'Ready to record'
     : missing.length ? 'Some audio has not reached this lecture'
     : failed ? 'Audio saved · transcription needs retry'
+    : providerDown && cleanup ? 'Transcript saved · AI cleanup unavailable'
     : cleanup ? 'Transcript saved · AI cleanup needs review'
     : detail.transcription_pending_chunks ? 'Audio saved · transcribing'
     : detail.empty_transcript_chunks ? 'Audio saved · some parts have no detected speech'
@@ -1040,14 +1052,21 @@ function renderLectureHealth(detail) {
   if (detail.empty_transcript_chunks) parts.push(`${detail.empty_transcript_chunks} parts finished without transcript text. Check your audio source; a missing speaker signal cannot be restored by text cleanup`);
   if (missing.length) parts.push(`Missing part${missing.length === 1 ? '' : 's'}: ${missing.slice(0, 8).map(i => i + 1).join(', ')}${missing.length > 8 ? '…' : ''}. Check Recover audio in the original browser`);
   if (duplicate.length) parts.push('Duplicate part numbers need review');
-  if (cleanup) parts.push(`${cleanup} cleanup result${cleanup === 1 ? '' : 's'} need retry; original transcript remains available`);
-  else if (detail.cleanup_pending_chunks) parts.push('Optional cleanup is still processing');
+  if (providerDown && cleanup) {
+    parts.push('AI cleanup provider is unavailable; original transcript remains. Retry after the provider works again');
+  } else if (cleanup) {
+    parts.push(`${cleanup} cleanup result${cleanup === 1 ? '' : 's'} need retry; original transcript remains available`);
+  } else if (detail.cleanup_pending_chunks) {
+    parts.push('Optional cleanup is still processing');
+  }
   if (detail.status === 'open' && !state.recording) parts.push('Session not marked ended');
   if (detail.chunk_count && !detail.completeness_known && !missing.length) parts.push('No internal gaps detected; recording-end completeness not verified');
   el('lectureHealthDetail').textContent = parts.join(' · ');
   el('retryTranscription').hidden = !failed;
   el('retryCleanup').hidden = !cleanup;
-  el('cleanupSummary').textContent = cleanup ? 'Uses original text where cleanup failed or changed the language. Your saved notes are unchanged.'
+  el('cleanupSummary').textContent = providerDown && cleanup
+    ? 'Cleanup is paused because the AI provider is unavailable. Original transcript text stays available; your notes are unchanged.'
+    : cleanup ? 'Uses original text where cleanup failed or changed the language. Your saved notes are unchanged.'
     : 'Optional cleanup. Original text is used for parts still processing.';
 }
 function rememberStoppedLecture(sessionId, expected) {

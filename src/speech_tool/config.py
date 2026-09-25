@@ -16,13 +16,19 @@ DEFAULT_ASR_MODEL = os.environ.get(
 DEFAULT_POLISHER = os.environ.get("SPEECH_TOOL_POLISHER", "opencode")
 OPENCODE_BIN = os.environ.get("SPEECH_TOOL_OPENCODE_BIN", "opencode")
 OPENCODE_MODEL = os.environ.get(
-    "SPEECH_TOOL_OPENCODE_MODEL", "opencode/mimo-v2.5-free"
+    "SPEECH_TOOL_OPENCODE_MODEL", "opencode/mimo-v2.6-flash-free"
 )
 POLISH_TIMEOUT_SECONDS = float(os.environ.get("SPEECH_TOOL_POLISH_TIMEOUT", "20"))
 LECTURE_POLISH_TIMEOUT_SECONDS = float(
     os.environ.get("SPEECH_TOOL_LECTURE_POLISH_TIMEOUT", "120")
 )
 POLISH_RETRY_LIMIT = int(os.environ.get("SPEECH_TOOL_POLISH_RETRY", "1"))
+POLISH_PROVIDER_FAILURE_STREAK = int(
+    os.environ.get("SPEECH_TOOL_POLISH_PROVIDER_STREAK", "3")
+)
+POLISH_PROVIDER_COOLDOWN_SECONDS = float(
+    os.environ.get("SPEECH_TOOL_POLISH_COOLDOWN", "300")
+)
 QUESTION_TIMEOUT_SECONDS = float(os.environ.get("SPEECH_TOOL_QUESTION_TIMEOUT", "20"))
 DEFAULT_BROWSER = os.environ.get("SPEECH_TOOL_BROWSER", "Google Chrome")
 

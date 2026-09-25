@@ -1,4 +1,5 @@
 import json
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -54,13 +55,52 @@ def test_text_runner_denies_tools_and_isolates_cwd(monkeypatch):
         assert "--dangerously-skip-permissions" not in cmd
         assert "--pure" in cmd and "speech-text" in cmd
         assert "speech-text-" in kw["cwd"]
+        assert kw["env"]["XDG_DATA_HOME"].startswith(kw["cwd"])
+        assert kw["env"]["XDG_STATE_HOME"].startswith(kw["cwd"])
         config = json.loads(kw["env"]["OPENCODE_CONFIG_CONTENT"])
         assert config["permission"] == {"*": "deny"}
         assert config["agent"]["speech-text"]["tools"] == {"*": False}
-        return SimpleNamespace(returncode=0, stdout='{"type":"text","part":{"text":"Clean text."}}')
+        return SimpleNamespace(returncode=0, stdout='{"type":"text","part":{"text":"Clean text."}}', stderr="")
     monkeypatch.setattr("speech_tool.polish.subprocess.run", run)
     assert run_opencode("clean", 3).text == "Clean text."
     assert _extract_opencode_text("saved file successfully") == ""
+
+
+def test_opencode_classifies_provider_blocks(monkeypatch):
+    from speech_tool.polish import _classify_opencode_failure
+
+    version, detail = _classify_opencode_failure(
+        '{"type":"error","error":{"name":"APIError","data":{"message":"OpenCode\'s free tier can only be used from within OpenCode"}}}',
+        "",
+    )
+    assert version == "provider_unavailable"
+    assert "unavailable" in detail.lower()
+    version, detail = _classify_opencode_failure("", "Unknown: FileSystem.open (/tmp/opencode.log)")
+    assert version == "provider_unavailable"
+
+
+def test_polish_cooldown_skips_provider_calls(tmp_path):
+    store = EventStore(tmp_path)
+    event = store.create_from_audio(b"audio", "a.wav", 1)
+    store.write_raw_transcript(event.id, "raw")
+    store.update_event(event.id, lambda e: (setattr(e, "asr_status", "completed"), setattr(e, "transcript_revision", 1)))
+    calls = []
+
+    class Counting:
+        def polish(self, *a, **kw):
+            calls.append(1)
+            return PolishResult("raw", "test", "provider_unavailable", "provider down")
+
+    pipe = Pipeline(store, asr=FakeAsr(), polisher=Counting(), auto_start=False)
+    pipe._polish_fail_streak = 3
+    pipe._polish_cooldown_until = time.monotonic() + 60
+    pipe._polish_provider_detail = "provider down"
+    pipe._run_polish(event.id, 1)
+    assert calls == []
+    done = store.get(event.id)
+    assert done.polish_status == "failed"
+    assert done.lm_version == "provider_unavailable"
+    assert "provider down" in (done.last_error or "")
 
 
 def test_empty_input_never_calls_model(monkeypatch):

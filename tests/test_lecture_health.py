@@ -23,6 +23,17 @@ def add_chunk(store, session, index, raw='This is the original lecture transcrip
     return event
 
 
+def test_health_exposes_polish_provider(tmp_path):
+    store, pipe, client = setup(tmp_path)
+    pipe._polish_fail_streak = 2
+    pipe._polish_provider_detail = "provider down"
+    result = client.get('/api/health').json()
+    assert result['ok'] is True
+    assert result['polish']['consecutive_failures'] == 2
+    assert result['polish']['available'] is True
+    assert 'model' in result['polish']
+
+
 def test_empty_completed_audio_is_not_pending_transcription(tmp_path):
     store, pipe, client = setup(tmp_path)
     session = store.create_session()

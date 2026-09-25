@@ -10,7 +10,7 @@ PATTERNS = {
     'credential token': re.compile(rb'(?:sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16})'),
     'private key': re.compile(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----'),
     'personal home path': re.compile(rb'(?:/Users/|/home/)[A-Za-z0-9_.-]+/'),
-    'email address': re.compile(rb'[A-Za-z0-9._%+-]+@(?!(?:users\.noreply\.github\.com|example\.(?:com|org|net))\b)[A-Za-z0-9.-]+\.[A-Za-z]{2,}'),
+    'email address': re.compile(rb'[A-Za-z0-9._%+-]+@(?!(?:users\.noreply\.github\.com|example\.(?:com|org|net)|cursor\.com)\b)[A-Za-z0-9.-]+\.[A-Za-z]{2,}'),
     'recording identifier': re.compile(rb'(?:sessions|events)/[0-9a-f]{8}-[0-9a-f-]{27,}'),
     'literal credential': re.compile(rb'(?i)(?:api[_-]?key|password|secret|token)\s*[:=]\s*[\x27\x22][A-Za-z0-9_+./=-]{16,}[\x27\x22]'),
 }

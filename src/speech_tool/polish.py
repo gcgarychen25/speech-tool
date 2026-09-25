@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 from speech_tool.config import (
     DEFAULT_POLISHER,
@@ -40,6 +41,16 @@ Rules:
 
 """
 
+PROVIDER_UNAVAILABLE_DETAIL = (
+    "AI cleanup is unavailable from the provider right now; raw transcript preserved"
+)
+MODEL_UNAVAILABLE_DETAIL = (
+    "AI cleanup model is unavailable; raw transcript preserved"
+)
+PROVIDER_ERROR_DETAIL = (
+    "AI cleanup provider returned an error; raw transcript preserved"
+)
+
 
 def build_polish_prompt(raw_text: str, course: str | None = None) -> str:
     return (
@@ -56,6 +67,7 @@ class PolishResult:
     text: str
     model: str
     version: str
+    detail: str | None = None
 
 
 class Polisher:
@@ -73,8 +85,72 @@ class FailingPolisher(Polisher):
         raise RuntimeError("Injected polishing failure")
 
 
+def _auth_candidates() -> list[Path]:
+    paths: list[Path] = []
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        paths.append(Path(xdg) / "opencode" / "auth.json")
+    paths.append(Path.home() / ".local" / "share" / "opencode" / "auth.json")
+    return paths
+
+
+def _prepare_opencode_env(workspace: Path) -> dict[str, str]:
+    """Isolate OpenCode state so a stuck shared log cannot block cleanup."""
+    env = os.environ.copy()
+    for key in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT"):
+        env.pop(key, None)
+    config_home = workspace / "xdg-config"
+    data_home = workspace / "xdg-data"
+    state_home = workspace / "xdg-state"
+    opencode_data = data_home / "opencode"
+    opencode_data.mkdir(parents=True, exist_ok=True)
+    config_home.mkdir(parents=True, exist_ok=True)
+    state_home.mkdir(parents=True, exist_ok=True)
+    for auth in _auth_candidates():
+        if auth.is_file():
+            shutil.copy2(auth, opencode_data / "auth.json")
+            break
+    env["XDG_CONFIG_HOME"] = str(config_home)
+    env["XDG_DATA_HOME"] = str(data_home)
+    env["XDG_STATE_HOME"] = str(state_home)
+    env["OPENCODE_CONFIG_CONTENT"] = json.dumps({
+        "permission": {"*": "deny"},
+        "share": "disabled",
+        "autoupdate": False,
+        "agent": {
+            "speech-text": {
+                "mode": "primary",
+                "permission": {"*": "deny"},
+                "tools": {"*": False},
+                "prompt": (
+                    "You transform supplied text only. Never use tools or access "
+                    "files. Return only the requested text."
+                ),
+            }
+        },
+    })
+    return env
+
+
+def _classify_opencode_failure(stdout: str, stderr: str) -> tuple[str, str]:
+    blob = f"{stdout or ''}\n{stderr or ''}"
+    lower = blob.lower()
+    if (
+        "freetiererror" in lower
+        or "free tier can only be used" in lower
+        or "filesystem.open" in lower
+    ):
+        return "provider_unavailable", PROVIDER_UNAVAILABLE_DETAIL
+    if "providermodelnotfound" in lower or "model not found" in lower:
+        return "model_unavailable", MODEL_UNAVAILABLE_DETAIL
+    if "timeout" in lower and "error" in lower:
+        return "timeout", "AI cleanup timed out; raw transcript preserved"
+    return "error", PROVIDER_ERROR_DETAIL
+
+
 def run_opencode(prompt: str, timeout: float) -> PolishResult:
     binary = shutil.which(OPENCODE_BIN) or OPENCODE_BIN
+    model = OPENCODE_MODEL or "opencode-default"
     cmd = [
         binary,
         "run",
@@ -88,19 +164,7 @@ def run_opencode(prompt: str, timeout: float) -> PolishResult:
         cmd.extend(["--model", OPENCODE_MODEL])
     try:
         with tempfile.TemporaryDirectory(prefix="speech-text-") as workspace:
-            env = os.environ.copy()
-            for key in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT"):
-                env.pop(key, None)
-            env["XDG_CONFIG_HOME"] = workspace
-            env["OPENCODE_CONFIG_CONTENT"] = json.dumps({
-                "permission": {"*": "deny"},
-                "share": "disabled", "autoupdate": False,
-                "agent": {"speech-text": {
-                    "mode": "primary", "permission": {"*": "deny"},
-                    "tools": {"*": False},
-                    "prompt": "You transform supplied text only. Never use tools or access files. Return only the requested text.",
-                }},
-            })
+            env = _prepare_opencode_env(Path(workspace))
             result = subprocess.run(
                 cmd, capture_output=True, text=True, check=False,
                 timeout=timeout, cwd=workspace, env=env,
@@ -108,27 +172,28 @@ def run_opencode(prompt: str, timeout: float) -> PolishResult:
     except subprocess.TimeoutExpired:
         return PolishResult(
             text="",
-            model=OPENCODE_MODEL or "opencode-default",
+            model=model,
             version="timeout",
+            detail="AI cleanup timed out; raw transcript preserved",
         )
-    if result.returncode != 0:
+    except FileNotFoundError:
         return PolishResult(
             text="",
-            model=OPENCODE_MODEL or "opencode-default",
-            version="error",
+            model=model,
+            version="provider_unavailable",
+            detail="AI cleanup binary was not found; raw transcript preserved",
         )
-    text = _extract_opencode_text(result.stdout)
-    if not text.strip():
+    text = _extract_opencode_text(result.stdout or "")
+    if text.strip():
         return PolishResult(
-            text="",
-            model=OPENCODE_MODEL or "opencode-default",
-            version="empty",
+            text=to_simplified(text.strip()),
+            model=model,
+            version="opencode",
         )
-    return PolishResult(
-        text=to_simplified(text.strip()),
-        model=OPENCODE_MODEL or "opencode-default",
-        version="opencode",
-    )
+    version, detail = _classify_opencode_failure(result.stdout or "", result.stderr or "")
+    if result.returncode == 0 and version == "error":
+        version, detail = "empty", "AI cleanup returned no text; raw transcript preserved"
+    return PolishResult(text="", model=model, version=version, detail=detail)
 
 
 class OpencodePolisher(Polisher):
@@ -141,12 +206,24 @@ class OpencodePolisher(Polisher):
             (len(raw_text) > 500 and len(result.text) < len(raw_text) * 0.25)
             or re.search(r"(?i)(?:saved|wrote|created|written).{0,60}(?:transcript|\.md|\.txt)|(?:已保存|已写入|保存到).{0,60}(?:文件|\.md|\.txt)", result.text)
         ):
-            return PolishResult(raw_text.strip(), result.model, "error")
-        if result.version in {"timeout", "error", "empty"}:
+            return PolishResult(
+                raw_text.strip(),
+                result.model,
+                "error",
+                PROVIDER_ERROR_DETAIL,
+            )
+        if result.version in {
+            "timeout",
+            "error",
+            "empty",
+            "provider_unavailable",
+            "model_unavailable",
+        }:
             return PolishResult(
                 text=raw_text.strip(),
                 model=result.model,
                 version=result.version,
+                detail=result.detail,
             )
         return result
 
