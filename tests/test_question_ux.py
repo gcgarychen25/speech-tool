@@ -47,3 +47,12 @@ def test_suggestion_does_not_replace_draft_and_failures_are_logged(tmp_path, mon
     assert "question timeout" in caplog.text
     assert "private question" not in caplog.text
     assert client.get(f"/api/sessions/{session}").json()["latest_question"] == "My own wording"
+    monkeypatch.setattr(
+        "speech_tool.question.draft_question",
+        lambda **kwargs: PolishResult(text="", model="test", version="provider_unavailable"),
+    )
+    unavailable = client.post(endpoint, json={"confusion": "still private", "preserve_draft": True})
+    assert unavailable.status_code == 502
+    assert unavailable.json()["detail"].startswith("Question helper is unavailable right now")
+    assert "cleanup" not in unavailable.json()["detail"].lower()
+    assert "still private" not in unavailable.json()["detail"]

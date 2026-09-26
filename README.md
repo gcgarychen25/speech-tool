@@ -66,8 +66,10 @@ export SPEECH_TOOL_OPENCODE_MODEL=opencode/mimo-v2.6-flash-free
 
 Default cleanup uses OpenCode. Free-tier models may refuse non-interactive CLI
 calls; when that happens the UI keeps the raw transcript and reports cleanup as
-unavailable instead of looking hung. Override the model or provider credentials
-locally if cleanup must stay enabled.
+paused, including about how long automatic retries wait. **Retry cleanup** tries
+again immediately. A question-helper outage is reported separately and leaves
+the question box unchanged. Override the model or provider credentials locally
+if cleanup must stay enabled.
 
 ## Late-to-lecture
 
@@ -81,7 +83,7 @@ Equivalent commands:
 open "http://127.0.0.1:8787/?mode=lecture&record=1"
 ```
 
-That opens a new Chrome tab in Lecture mode and starts a new session immediately. Recording is on when Lecture is selected, the button is a red rounded square, and the timer is ticking. Discard a test take. A lecture left running auto-stops after **2 hours** and keeps the audio. Record/Stop stay visible at the bottom; scroll the lecture pane, not the whole page.
+That opens a new Chrome tab in Lecture mode and starts a new session immediately. Recording is on when Lecture is selected, the button is a red rounded square, and the timer is ticking. Discard a test take. A lecture left running auto-stops after **2 hours**. Saved audio keeps uploading and transcribing in the background. Record/Stop stay visible at the bottom; scroll the lecture pane, not the whole page.
 
 In Lecture, type directly into **Your question · ask in class** and press **Command-Enter** or **Draft question**. This text is always the primary input. If it is empty, the selected note or cursor line supplies the thought. **Use selected note** explicitly copies a different note into the question box. **Command-Shift-Q** adds a note timestamp.
 
@@ -91,7 +93,7 @@ Suggestions appear separately; **Use this wording** applies one to your editable
 
 Question start/completion/failure, request reference, model and elapsed time are written to `runtime/server.log`; raw question text is not added to those diagnostic lines. The original thought, generated suggestion and source IDs remain in `questions.jsonl`.
 
-New lecture audio is submitted every minute, with best-effort browser backups every five seconds. If an upload fails or the tab is interrupted, reopen the tool and use **Recover audio**. Do not clear site data before recovering. The most recent unflushed audio can still be lost during an OS/browser crash; note-mode audio does not yet use this journal.
+New lecture audio is submitted every minute, with best-effort browser backups every five seconds. If an upload fails or the tab is interrupted, reopen the tool and use **Recover audio**. Completed parts retry on their own after recording stops. A part the server rejected stays in this browser until you use **Recover audio**. Do not clear site data before recovering. The most recent unflushed audio can still be lost during an OS/browser crash; note-mode audio does not yet use this journal.
 
 After approved code changes, publish a new local snapshot with `scripts/install-desktop.py --install --replace-service` using the dedicated runtime Python. This restarts only this tool's service and backs up its previous service configuration. Do not update during a recording.
 

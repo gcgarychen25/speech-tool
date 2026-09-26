@@ -113,6 +113,7 @@ class NoteView(BaseModel):
     state: str
     final_text: Optional[str] = None
     final_revision: int = 0
+    cleanup_provider_available: bool = True
     turns: list[NoteTurnView] = Field(default_factory=list)
 
 
@@ -132,6 +133,7 @@ class SessionView(BaseModel):
     polish_ready: bool = False
     polish_skipped: bool = False
     cleanup_provider_available: bool = True
+    cleanup_cooldown_seconds: int = 0
     cleanup_provider_detail: Optional[str] = None
     display_text: Optional[str] = None
     raw_transcript: Optional[str] = None
@@ -305,6 +307,7 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
         final_revision = note.final_revision
         if include_turns:
             final_text, final_revision = store.read_note_final(note_id)
+        provider = pipe.polish_provider_status()
         return NoteView(
             id=note.id,
             created_at=note.created_at,
@@ -315,6 +318,7 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             state=note_state,
             final_text=final_text,
             final_revision=final_revision,
+            cleanup_provider_available=bool(provider.get("available", True)),
             turns=(
                 [turn_view(event.id, include_text=False) for event in turns]
                 if include_turns
@@ -436,6 +440,7 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             polish_ready=polish_ready,
             polish_skipped=bool(cleanup_failed),
             cleanup_provider_available=bool(provider.get("available", True)),
+            cleanup_cooldown_seconds=int(provider.get("cooldown_remaining_seconds") or 0),
             cleanup_provider_detail=provider.get("last_detail"),
             transcribed_chunks=transcribed,
             empty_transcript_chunks=empty_transcript,
@@ -725,7 +730,7 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             raise HTTPException(
                 504 if result.version == "timeout" else 502,
                 (
-                    "AI cleanup provider is unavailable right now"
+                    "Question helper is unavailable right now"
                     if provider_down
                     else (
                         "AI took too long"

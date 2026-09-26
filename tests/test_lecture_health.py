@@ -1,3 +1,5 @@
+import time
+
 from fastapi.testclient import TestClient
 import pytest
 
@@ -123,6 +125,29 @@ def test_guard_preserves_code_switching_and_normal_cleanup():
     mixed = '今天我们学习 Rust 的 dynamic dispatch，它与 static dispatch 有什么区别，应该如何选择？'
     assert polish_quality_issue(mixed, mixed) is None
     assert polish_quality_issue(raw * 4, 'Summary.')
+
+
+def test_provider_pause_is_visible_without_raw_text(tmp_path):
+    store, pipe, client = setup(tmp_path)
+    session = store.create_session()
+    event = add_chunk(store, session, 0)
+    store.update_event(event.id, lambda e: (
+        setattr(e, 'polish_status', 'failed'),
+        setattr(e, 'lm_version', 'provider_unavailable'),
+    ))
+    pipe._polish_cooldown_until = time.monotonic() + 125
+    pipe._polish_provider_detail = (
+        "AI cleanup is unavailable from the provider right now; raw transcript preserved"
+    )
+    result = client.get(f'/api/sessions/{session.id}').json()
+    assert result['cleanup_provider_available'] is False
+    assert result['cleanup_failed_chunks'] == 1
+    assert result['cleanup_cooldown_seconds'] >= 120
+    assert result['cleanup_provider_detail'].startswith('AI cleanup')
+    assert 'original lecture' not in (result['cleanup_provider_detail'] or '')
+    note = client.post('/api/notes', json={'title': 'synthetic note'}).json()
+    assert note['cleanup_provider_available'] is False
+    assert note['state'] == 'empty'
 
 
 def test_retry_transcription_only_failed(tmp_path, monkeypatch):

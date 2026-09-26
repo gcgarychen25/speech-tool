@@ -28,6 +28,11 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "visibleHistory" in javascript
     assert "cleanup unavailable" in javascript or "AI cleanup unavailable" in javascript
     assert "cleanup_provider_available" in javascript
+    assert "cleanup_cooldown_seconds" in javascript
+    assert "Completed parts retry automatically" in javascript
+    assert "will not retry until you use Recover audio" in javascript
+    assert "cannot coordinate the microphone" in javascript
+    assert "Audio did not start" in (ROOT / "web" / "capture.js").read_text(encoding="utf-8")
     assert "Copy note" in html
     assert ">Clear</button>" in html
     assert "clearContinuousNote" in javascript

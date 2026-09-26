@@ -26,6 +26,9 @@ window.SpeechCapture = {
       if (shared && !shared.getAudioTracks().some(t => t.readyState === 'live')) throw new Error('Meeting sharing ended before recording started. Choose the meeting audio again.');
       context = new AudioContext();
       await context.resume();
+      if (context.state !== "running") {
+        throw new Error("Audio did not start. Click the page, then Record again. Nothing was saved.");
+      }
       const output = context.createMediaStreamDestination();
       const inputs = {microphone: mic};
       if (shared) inputs.meeting = new MediaStream(shared.getAudioTracks());

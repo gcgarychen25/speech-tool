@@ -84,6 +84,7 @@ const state = {
   sessionRevision: 0,
   recordingOffset: 0,
   releaseCaptureLock: null,
+  captureLockReason: "",
   autoStopped: false,
 };
 
@@ -153,7 +154,11 @@ function itemStatus(item) {
     if (item.chunk_count) return 'transcript saved';
   }
   if (item.state === "empty") return "empty";
-  if (item.state === 'polishing_failed') return 'transcript saved · cleanup needs retry';
+  if (item.state === "polishing_failed") {
+    return item.cleanup_provider_available === false
+      ? "transcript saved · cleanup unavailable"
+      : "transcript saved · cleanup needs retry";
+  }
   if ((item.state || "").includes("fail")) return "transcription needs retry";
   if (item.state === "transcribing") return "transcribing";
   if (item.status === "open") return "open";
@@ -884,7 +889,7 @@ async function startRecording(options = {}) {
     state.starting = false;
     el('audioSource').disabled = false;
     recordBtn.disabled = false;
-    setStatus("Recording is already active in another Speech Tool tab. Return to that tab.");
+    setStatus(captureBlockedMessage(false));
     return;
   }
   if (options.forceLecture) {
@@ -1024,21 +1029,50 @@ async function refreshRecoveryStatus() {
     el('recoverAudio').hidden = !rows.length;
     el('recoverAudio').disabled = recoveryBusy || state.recording;
     el('recoverAudio').textContent = recoveryBusy ? 'Recovering…' : 'Recover audio';
-    const partial = rows.filter(row => !row.complete).length;
     el('recoveryStatus').textContent = recoveryBusy ? 'Restoring saved audio to its original lecture…'
       : uploadingCaptures.size ? `Uploading ${uploadingCaptures.size} recording part${uploadingCaptures.size === 1 ? '' : 's'} · the local copy stays until the server confirms it.`
-      : `${rows.length} recording part${rows.length === 1 ? '' : 's'} saved in this browser. ${partial ? `${partial} interrupted part${partial === 1 ? '' : 's'} need review; use Recover audio after stopping.` : 'Completed uploads retry automatically when recording is stopped.'}`;
+      : recoveryQueueDetail(rows);
   } catch (error) {
     el('recoveryPanel').hidden = false;
     el('recoveryStatus').textContent = 'Browser audio backup is unavailable. Keep this tab open until uploads finish.';
   }
+}
+function publicCleanupDetail(detail) {
+  const text = String(detail || "").replace(/\s+/g, " ").trim();
+  if (!text.startsWith("AI cleanup") || text.length > 180 || /[\\/]/.test(text)) return "";
+  return text.replace(/[.]+$/, "");
+}
+function cleanupPausePhrase(seconds) {
+  const remaining = Math.max(0, Number(seconds) || 0);
+  if (remaining >= 90) return `about ${Math.ceil(remaining / 60)} min`;
+  if (remaining > 0) return `${remaining}s`;
+  return "a short time";
+}
+function recoveryQueueDetail(rows) {
+  const partial = rows.filter((row) => !row.complete);
+  const blocked = rows.filter((row) => row.complete && blockedCaptures.has(row.id));
+  const waiting = rows.filter((row) => row.complete && !blockedCaptures.has(row.id));
+  const bits = [`${rows.length} recording part${rows.length === 1 ? "" : "s"} saved in this browser`];
+  if (partial.length) {
+    bits.push(`${partial.length} interrupted part${partial.length === 1 ? "" : "s"} need review. Use Recover audio after stopping`);
+  }
+  if (blocked.length) {
+    bits.push(`${blocked.length} part${blocked.length === 1 ? " was" : "s were"} rejected by the server and will not retry until you use Recover audio`);
+  }
+  if (waiting.length) {
+    bits.push(state.recording
+      ? "Completed parts retry automatically after recording stops"
+      : "Completed parts retry automatically");
+  }
+  return `${bits.join(". ")}.`;
 }
 function renderLectureHealth(detail) {
   const missing = detail.missing_chunk_indices || [];
   const failed = detail.asr_failed_chunks || 0;
   const cleanup = detail.cleanup_failed_chunks || 0;
   const duplicate = detail.duplicate_chunk_indices || [];
-  const providerDown = detail.cleanup_provider_available === false;
+  const cooldown = Math.max(0, Number(detail.cleanup_cooldown_seconds) || 0);
+  const providerDown = detail.cleanup_provider_available === false || cooldown > 0;
   el('lectureHealth').dataset.attention = Boolean(missing.length || failed || cleanup || duplicate.length || detail.empty_transcript_chunks || providerDown);
   el('lectureHealthTitle').textContent = !detail.chunk_count ? 'Ready to record'
     : missing.length ? 'Some audio has not reached this lecture'
@@ -1053,7 +1087,9 @@ function renderLectureHealth(detail) {
   if (missing.length) parts.push(`Missing part${missing.length === 1 ? '' : 's'}: ${missing.slice(0, 8).map(i => i + 1).join(', ')}${missing.length > 8 ? '…' : ''}. Check Recover audio in the original browser`);
   if (duplicate.length) parts.push('Duplicate part numbers need review');
   if (providerDown && cleanup) {
-    parts.push('AI cleanup provider is unavailable; original transcript remains. Retry after the provider works again');
+    const safeDetail = publicCleanupDetail(detail.cleanup_provider_detail);
+    parts.push(`AI cleanup is paused for ${cleanupPausePhrase(cooldown)} after repeated provider failures. Original transcript remains. Retry cleanup tries again now`);
+    if (safeDetail) parts.push(safeDetail);
   } else if (cleanup) {
     parts.push(`${cleanup} cleanup result${cleanup === 1 ? '' : 's'} need retry; original transcript remains available`);
   } else if (detail.cleanup_pending_chunks) {
@@ -1065,7 +1101,7 @@ function renderLectureHealth(detail) {
   el('retryTranscription').hidden = !failed;
   el('retryCleanup').hidden = !cleanup;
   el('cleanupSummary').textContent = providerDown && cleanup
-    ? 'Cleanup is paused because the AI provider is unavailable. Original transcript text stays available; your notes are unchanged.'
+    ? `Cleanup is paused for ${cleanupPausePhrase(cooldown)} after repeated provider failures. Original transcript text stays available. Retry cleanup tries again now. Your notes are unchanged.`
     : cleanup ? 'Uses original text where cleanup failed or changed the language. Your saved notes are unchanged.'
     : 'Optional cleanup. Original text is used for parts still processing.';
 }
@@ -1154,7 +1190,7 @@ async function onRecorderStop() {
   } finally {
     if (finalStop) state.releaseCaptureLock?.();
   }
-  if (state.autoStopped) setStatus("Stopped after 2 hours · recording saved");
+  if (state.autoStopped) setStatus("Stopped after 2 hours. Audio uploads and transcript processing continue in the background.");
 }
 
 noteFinal.addEventListener("input", () => {
@@ -1546,17 +1582,33 @@ questionOut.addEventListener("input", () => {
 });
 
 async function claimCapture() {
-  if (!navigator.locks) return false;
+  state.captureLockReason = "";
+  if (!navigator.locks) {
+    state.captureLockReason = "unsupported";
+    return false;
+  }
   return new Promise((resolve) => navigator.locks.request("speech-microphone", { ifAvailable: true }, async (lock) => {
-    if (!lock) { resolve(false); return; }
+    if (!lock) {
+      state.captureLockReason = "busy";
+      resolve(false);
+      return;
+    }
     await new Promise((release) => { state.releaseCaptureLock = release; resolve(true); });
     state.releaseCaptureLock = null;
   }));
 }
+function captureBlockedMessage(forRecovery) {
+  if (state.captureLockReason === "unsupported") {
+    return "This browser cannot coordinate the microphone across tabs. Use Chrome, then try again.";
+  }
+  return forRecovery
+    ? "Stop the recording in the other tab first."
+    : "Recording is already active in another Speech Tool tab. Return to that tab.";
+}
 async function recoverSavedAudio(manual = false) {
   if (recoveryBusy) return;
   if (state.recording) { setStatus("Stop recording before recovering audio."); return; }
-  if (manual && !await claimCapture()) { setStatus("Stop the recording in the other tab first."); return; }
+  if (manual && !await claimCapture()) { setStatus(captureBlockedMessage(true)); return; }
   recoveryBusy = true;
   let recovered = 0, failed = 0;
   try {
