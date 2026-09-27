@@ -128,6 +128,7 @@ async function api(url, options) {
 function turnStatus(turn) {
   if (turn.asr_status === "failed") return "transcription failed";
   if (turn.asr_status !== "completed") return "transcribing";
+  if (turn.lm_version === "quality_rejected") return "transcript saved · original kept";
   if (turn.polish_status === "failed") {
     return turn.lm_version === "provider_unavailable" || turn.lm_version === "model_unavailable"
       ? "transcript saved · cleanup unavailable"
@@ -139,14 +140,31 @@ function turnStatus(turn) {
   }
   return "ready";
 }
+function polishRetryVisible(detail) {
+  return detail.polish_status === "failed"
+    || ["timeout", "error", "empty", "provider_unavailable", "model_unavailable", "quality_rejected"].includes(detail.lm_version);
+}
+function cleanupBreakdown(detail) {
+  const cleanup = detail.cleanup_failed_chunks || 0;
+  const guard = detail.cleanup_guard_chunks || 0;
+  const providerFailed = detail.cleanup_provider_failed_chunks || 0;
+  const cooldown = Math.max(0, Number(detail.cleanup_cooldown_seconds) || 0);
+  const providerDown = detail.cleanup_provider_available === false || cooldown > 0;
+  const guardOnly = cleanup > 0 && guard === cleanup && providerFailed === 0;
+  return {
+    cleanup, guard, providerFailed, cooldown, providerDown, guardOnly,
+    providerPause: providerDown && cleanup > 0 && !guardOnly,
+  };
+}
 function itemStatus(item) {
   if (item.kind === 'session') {
     if (item.missing_chunk_indices?.length) return `${item.missing_chunk_indices.length} audio gap · review`;
     if (item.asr_failed_chunks) return 'audio saved · transcription needs retry';
     if (item.cleanup_failed_chunks) {
-      return item.cleanup_provider_available === false
-        ? 'transcript saved · cleanup unavailable'
-        : 'transcript saved · cleanup needs review';
+      const kind = cleanupBreakdown(item);
+      if (kind.providerPause) return 'transcript saved · cleanup unavailable';
+      if (kind.guardOnly) return 'transcript saved · original kept';
+      return 'transcript saved · cleanup needs review';
     }
     if (item.transcription_pending_chunks) return 'audio saved · transcribing';
     if (item.empty_transcript_chunks) return 'some parts have no detected speech';
@@ -157,7 +175,7 @@ function itemStatus(item) {
   if (item.state === "polishing_failed") {
     return item.cleanup_provider_available === false
       ? "transcript saved · cleanup unavailable"
-      : "transcript saved · cleanup needs retry";
+      : "transcript saved · cleanup needs review";
   }
   if ((item.state || "").includes("fail")) return "transcription needs retry";
   if (item.state === "transcribing") return "transcribing";
@@ -406,11 +424,14 @@ function updateInspectorFields(detail, isLatest) {
   inspectorTitle.textContent = isLatest
     ? `Latest polish · Round ${detail.turn_index + 1}`
     : `Round ${detail.turn_index + 1} polish`;
-  inspectorMeta.textContent = `${fmt(detail.duration_seconds)} · ${turnStatus(detail)}`;
+  inspectorMeta.textContent = `${fmt(detail.duration_seconds)} · ${turnStatus(detail)}${noteCleanupPause(detail)}`;
   inspectorPolished.disabled = detail.polished_draft == null;
   inspectorPolished.placeholder = detail.asr_status !== "completed"
     ? "Waiting for ASR…"
-    : (["pending", "running"].includes(detail.polish_status) ? "Polishing…" : "No transcript yet");
+    : (["pending", "running"].includes(detail.polish_status) ? "Polishing…"
+      : polishRetryVisible(detail) && !detail.polished_draft
+        ? "Original transcript kept. Cleanup did not replace it."
+        : "No transcript yet");
   if (!polishSave.dirty && !polishSave.pending && document.activeElement !== inspectorPolished) {
     const value = detail.polished_draft || "";
     if (inspectorPolished.value !== value) {
@@ -420,7 +441,15 @@ function updateInspectorFields(detail, isLatest) {
     }
   }
   copyInspectorPolished.disabled = !inspectorPolished.value;
-  retryInspectorPolish.hidden = !["timeout", "error", "empty", "provider_unavailable", "model_unavailable"].includes(detail.lm_version);
+  retryInspectorPolish.hidden = !polishRetryVisible(detail);
+}
+function noteCleanupPause(detail) {
+  const note = state.note || {};
+  const cooldown = Math.max(0, Number(note.cleanup_cooldown_seconds) || 0);
+  const providerDown = note.cleanup_provider_available === false || cooldown > 0;
+  const providerFailure = detail.lm_version === "provider_unavailable" || detail.lm_version === "model_unavailable";
+  if (!providerDown || !providerFailure) return "";
+  return ` · paused for ${cleanupPausePhrase(cooldown)} · Retry polish tries again now`;
 }
 async function showRoundPolish(turnId) {
   if (!state.note || !turnId) return;
@@ -1069,15 +1098,15 @@ function recoveryQueueDetail(rows) {
 function renderLectureHealth(detail) {
   const missing = detail.missing_chunk_indices || [];
   const failed = detail.asr_failed_chunks || 0;
-  const cleanup = detail.cleanup_failed_chunks || 0;
   const duplicate = detail.duplicate_chunk_indices || [];
-  const cooldown = Math.max(0, Number(detail.cleanup_cooldown_seconds) || 0);
-  const providerDown = detail.cleanup_provider_available === false || cooldown > 0;
+  const kind = cleanupBreakdown(detail);
+  const { cleanup, guard, providerFailed, cooldown, providerDown, guardOnly, providerPause } = kind;
   el('lectureHealth').dataset.attention = Boolean(missing.length || failed || cleanup || duplicate.length || detail.empty_transcript_chunks || providerDown);
   el('lectureHealthTitle').textContent = !detail.chunk_count ? 'Ready to record'
     : missing.length ? 'Some audio has not reached this lecture'
     : failed ? 'Audio saved · transcription needs retry'
-    : providerDown && cleanup ? 'Transcript saved · AI cleanup unavailable'
+    : providerPause ? 'Transcript saved · AI cleanup unavailable'
+    : guardOnly ? 'Transcript saved · original kept'
     : cleanup ? 'Transcript saved · AI cleanup needs review'
     : detail.transcription_pending_chunks ? 'Audio saved · transcribing'
     : detail.empty_transcript_chunks ? 'Audio saved · some parts have no detected speech'
@@ -1086,24 +1115,32 @@ function renderLectureHealth(detail) {
   if (detail.empty_transcript_chunks) parts.push(`${detail.empty_transcript_chunks} parts finished without transcript text. Check your audio source; a missing speaker signal cannot be restored by text cleanup`);
   if (missing.length) parts.push(`Missing part${missing.length === 1 ? '' : 's'}: ${missing.slice(0, 8).map(i => i + 1).join(', ')}${missing.length > 8 ? '…' : ''}. Check Recover audio in the original browser`);
   if (duplicate.length) parts.push('Duplicate part numbers need review');
-  if (providerDown && cleanup) {
+  if (providerPause) {
     const safeDetail = publicCleanupDetail(detail.cleanup_provider_detail);
     parts.push(`AI cleanup is paused for ${cleanupPausePhrase(cooldown)} after repeated provider failures. Original transcript remains. Retry cleanup tries again now`);
     if (safeDetail) parts.push(safeDetail);
-  } else if (cleanup) {
+  } else if (providerFailed) {
+    parts.push(`${providerFailed} cleanup result${providerFailed === 1 ? '' : 's'} need retry; original transcript remains available`);
+  } else if (cleanup && !guard) {
     parts.push(`${cleanup} cleanup result${cleanup === 1 ? '' : 's'} need retry; original transcript remains available`);
   } else if (detail.cleanup_pending_chunks) {
     parts.push('Optional cleanup is still processing');
+  }
+  if (guard) parts.push(`${guard} cleanup result${guard === 1 ? '' : 's'} kept the original after a language or length check`);
+  if (!providerPause && providerDown && guardOnly) {
+    parts.push(`Automatic cleanup is paused for ${cleanupPausePhrase(cooldown)}. Retry cleanup tries again now`);
   }
   if (detail.status === 'open' && !state.recording) parts.push('Session not marked ended');
   if (detail.chunk_count && !detail.completeness_known && !missing.length) parts.push('No internal gaps detected; recording-end completeness not verified');
   el('lectureHealthDetail').textContent = parts.join(' · ');
   el('retryTranscription').hidden = !failed;
   el('retryCleanup').hidden = !cleanup;
-  el('cleanupSummary').textContent = providerDown && cleanup
+  el('cleanupSummary').textContent = providerPause
     ? `Cleanup is paused for ${cleanupPausePhrase(cooldown)} after repeated provider failures. Original transcript text stays available. Retry cleanup tries again now. Your notes are unchanged.`
-    : cleanup ? 'Uses original text where cleanup failed or changed the language. Your saved notes are unchanged.'
-    : 'Optional cleanup. Original text is used for parts still processing.';
+    : guardOnly
+      ? `Original transcript kept where cleanup changed the language or removed too much.${providerDown ? ` Automatic cleanup is paused for ${cleanupPausePhrase(cooldown)}.` : ''} Your saved notes are unchanged.`
+      : cleanup ? 'Uses original text where cleanup failed or changed the language. Your saved notes are unchanged.'
+      : 'Optional cleanup. Original text is used for parts still processing.';
 }
 function rememberStoppedLecture(sessionId, expected) {
   localStorage.setItem(`speech-stop-${sessionId}`, JSON.stringify({expected_chunk_count: expected}));
@@ -1152,24 +1189,29 @@ async function handleDiscard() {
   if (state.captureReady) {
     try { await state.captureReady; } catch (_) {}
   }
+  let statusText = "Discarded";
   if (state.recordingMode === "note") {
-    if (state.createdNoteForRecording && !state.note?.turn_count) {
+    const keptRounds = Boolean(state.note?.turn_count);
+    if (state.createdNoteForRecording && !keptRounds) {
       await api(`/api/notes/${state.selectedId}`, { method: "DELETE" });
       state.selectedId = null;
       resetNoteEditor();
       await sync();
+    } else if (keptRounds) {
+      statusText = "This take was discarded. Earlier rounds stay in the note.";
     }
   } else if (state.liveSessionId) {
     if (!state.chunkIndex) {
       await api(`/api/sessions/${state.liveSessionId}`, { method: "DELETE" });
     } else {
+      statusText = "In-progress part discarded. Earlier parts of this lecture stay saved.";
       await Promise.allSettled(state.uploads);
       await api(`/api/sessions/${state.liveSessionId}/end`, { method: "POST" });
     }
     state.liveSessionId = null;
     await sync();
   }
-  setStatus("Discarded");
+  setStatus(statusText);
 }
 async function onRecorderStop() {
   const recorder = state.recorder;

@@ -55,6 +55,8 @@ def test_gap_trailing_gap_next_index_and_saved_raw(tmp_path):
     result = client.get(f'/api/sessions/{session.id}').json()
     assert result['transcribed_chunks'] == 2
     assert result['cleanup_failed_chunks'] == 1
+    assert result['cleanup_provider_failed_chunks'] == 1
+    assert result['cleanup_guard_chunks'] == 0
     assert result['missing_chunk_indices'] == [1]
     assert result['next_chunk_index'] == 3
     assert not result['completeness_known']
@@ -96,6 +98,8 @@ def test_language_guard_historical_fallback_and_targeted_retry(tmp_path, monkeyp
     store.update_event(event.id, lambda e: (setattr(e, 'polish_status', 'completed'), setattr(e, 'polished_revision', 1)))
     result = client.get(f'/api/sessions/{session.id}').json()
     assert result['cleanup_failed_chunks'] == 1
+    assert result['cleanup_guard_chunks'] == 1
+    assert result['cleanup_provider_failed_chunks'] == 0
     assert result['polished_transcript'] == raw.strip()
     assert store.read_polished_transcript(event.id) == translated
     called = []
@@ -115,6 +119,9 @@ def test_new_bad_cleanup_not_published(tmp_path):
     pipe.polisher = Translator()
     pipe._run_polish(event.id, 1)
     assert store.get(event.id).lm_version == 'quality_rejected'
+    view = client.get(f'/api/sessions/{event.session_id}').json()
+    assert view['cleanup_guard_chunks'] == 1
+    assert view['cleanup_provider_failed_chunks'] == 0
     assert not store.read_polished_transcript(event.id)
     assert store.read_raw_transcript(event.id)
 
@@ -142,11 +149,14 @@ def test_provider_pause_is_visible_without_raw_text(tmp_path):
     result = client.get(f'/api/sessions/{session.id}').json()
     assert result['cleanup_provider_available'] is False
     assert result['cleanup_failed_chunks'] == 1
+    assert result['cleanup_provider_failed_chunks'] == 1
+    assert result['cleanup_guard_chunks'] == 0
     assert result['cleanup_cooldown_seconds'] >= 120
     assert result['cleanup_provider_detail'].startswith('AI cleanup')
     assert 'original lecture' not in (result['cleanup_provider_detail'] or '')
     note = client.post('/api/notes', json={'title': 'synthetic note'}).json()
     assert note['cleanup_provider_available'] is False
+    assert note['cleanup_cooldown_seconds'] >= 120
     assert note['state'] == 'empty'
 
 

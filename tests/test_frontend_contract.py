@@ -29,6 +29,14 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "cleanup unavailable" in javascript or "AI cleanup unavailable" in javascript
     assert "cleanup_provider_available" in javascript
     assert "cleanup_cooldown_seconds" in javascript
+    assert "cleanup_guard_chunks" in javascript
+    assert "cleanup_provider_failed_chunks" in javascript
+    assert "transcript saved · original kept" in javascript
+    assert "language or length check" in javascript
+    assert "In-progress part discarded. Earlier parts of this lecture stay saved." in javascript
+    assert "Earlier rounds stay in the note." in javascript
+    assert "Original transcript kept. Cleanup did not replace it." in javascript
+    assert "quality_rejected" in javascript
     assert "Completed parts retry automatically" in javascript
     assert "will not retry until you use Recover audio" in javascript
     assert "cannot coordinate the microphone" in javascript

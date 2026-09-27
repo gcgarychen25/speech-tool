@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from speech_tool.pipeline import Pipeline, CaptureConflict
+from speech_tool.pipeline import PROVIDER_POLISH_FAILURES, Pipeline, CaptureConflict
 from speech_tool.polish_quality import polish_quality_issue
 from speech_tool.store import EventStore, NoteRevisionConflict, SessionRevisionConflict
 from speech_tool.transcript_quality import is_noise_transcript
@@ -114,6 +114,7 @@ class NoteView(BaseModel):
     final_text: Optional[str] = None
     final_revision: int = 0
     cleanup_provider_available: bool = True
+    cleanup_cooldown_seconds: int = 0
     turns: list[NoteTurnView] = Field(default_factory=list)
 
 
@@ -149,6 +150,8 @@ class SessionView(BaseModel):
     transcription_pending_chunks: int = 0
     asr_failed_chunks: int = 0
     cleanup_failed_chunks: int = 0
+    cleanup_guard_chunks: int = 0
+    cleanup_provider_failed_chunks: int = 0
     cleanup_pending_chunks: int = 0
     missing_chunk_indices: list[int] = Field(default_factory=list)
     duplicate_chunk_indices: list[int] = Field(default_factory=list)
@@ -319,6 +322,7 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             final_text=final_text,
             final_revision=final_revision,
             cleanup_provider_available=bool(provider.get("available", True)),
+            cleanup_cooldown_seconds=int(provider.get("cooldown_remaining_seconds") or 0),
             turns=(
                 [turn_view(event.id, include_text=False) for event in turns]
                 if include_turns
@@ -345,6 +349,7 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
         worst_n = 0
         transcribed = asr_failed = cleanup_failed = cleanup_pending = 0
         empty_transcript = transcription_pending = 0
+        cleanup_guard = cleanup_provider_failed = 0
         indices = []
         for event_id in session.chunk_ids:
             event = store.get(event_id)
@@ -357,6 +362,15 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             transcription_pending += int(event.asr_status in {'pending', 'running'})
             asr_failed += int(event.asr_status == 'failed')
             cleanup_failed += int(event.polish_status == 'failed' or bool(issue))
+            guarded = event.lm_version == 'quality_rejected' or bool(issue)
+            provider_failed = (
+                event.polish_status == 'failed'
+                and event.lm_version in PROVIDER_POLISH_FAILURES
+            )
+            if guarded:
+                cleanup_guard += 1
+            elif provider_failed:
+                cleanup_provider_failed += 1
             cleanup_pending += int(event.asr_status == 'completed' and event.polish_status in {'pending', 'running'})
             if event.chunk_index is not None and 0 <= event.chunk_index < 10000:
                 indices.append(event.chunk_index)
@@ -447,6 +461,8 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             transcription_pending_chunks=transcription_pending,
             asr_failed_chunks=asr_failed,
             cleanup_failed_chunks=cleanup_failed,
+            cleanup_guard_chunks=cleanup_guard,
+            cleanup_provider_failed_chunks=cleanup_provider_failed,
             cleanup_pending_chunks=cleanup_pending,
             missing_chunk_indices=[i for i in range(expected) if i not in present],
             duplicate_chunk_indices=sorted(i for i in present if indices.count(i) > 1),

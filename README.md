@@ -83,7 +83,9 @@ Equivalent commands:
 open "http://127.0.0.1:8787/?mode=lecture&record=1"
 ```
 
-That opens a new Chrome tab in Lecture mode and starts a new session immediately. Recording is on when Lecture is selected, the button is a red rounded square, and the timer is ticking. Discard a test take. A lecture left running auto-stops after **2 hours**. Saved audio keeps uploading and transcribing in the background. Record/Stop stay visible at the bottom; scroll the lecture pane, not the whole page.
+That opens a new Chrome tab in Lecture mode and starts a new session immediately. Recording is on when Lecture is selected, the button is a red rounded square, and the timer is ticking. **Discard** drops only the part still recording. Earlier lecture parts and earlier note rounds stay saved, and the status says so. A lecture left running auto-stops after **2 hours**. Saved audio keeps uploading and transcribing in the background. Record/Stop stay visible at the bottom; scroll the lecture pane, not the whole page.
+
+A cleanup result that changed the language or removed too much is labeled as the original kept, with retry still available. A provider pause says how long automatic cleanup waits.
 
 In Lecture, type directly into **Your question · ask in class** and press **Command-Enter** or **Draft question**. This text is always the primary input. If it is empty, the selected note or cursor line supplies the thought. **Use selected note** explicitly copies a different note into the question box. **Command-Shift-Q** adds a note timestamp.
 
