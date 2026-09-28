@@ -36,6 +36,17 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "In-progress part discarded. Earlier parts of this lecture stay saved." in javascript
     assert "Earlier rounds stay in the note." in javascript
     assert "Original transcript kept. Cleanup did not replace it." in javascript
+    assert "cleanup_failed_turns" in javascript
+    assert "cleanup_guard_turns" in javascript
+    assert "Recover audio only keeps lecture parts." in javascript
+    pending = javascript.split("function hasPending()", 1)[1].split("function ", 1)[0]
+    assert "transcription_pending_chunks" in pending
+    assert "cleanup_pending_chunks" in pending
+    assert '"captured"' in pending
+    assert '"transcribed"' in pending
+    pause = javascript.split("function noteCleanupPause", 1)[1].split("function ", 1)[0]
+    assert "quality_rejected" in pause
+    assert "provider_unavailable" in pause
     assert "quality_rejected" in javascript
     assert "Completed parts retry automatically" in javascript
     assert "will not retry until you use Recover audio" in javascript

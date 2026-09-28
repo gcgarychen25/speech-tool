@@ -85,7 +85,7 @@ open "http://127.0.0.1:8787/?mode=lecture&record=1"
 
 That opens a new Chrome tab in Lecture mode and starts a new session immediately. Recording is on when Lecture is selected, the button is a red rounded square, and the timer is ticking. **Discard** drops only the part still recording. Earlier lecture parts and earlier note rounds stay saved, and the status says so. A lecture left running auto-stops after **2 hours**. Saved audio keeps uploading and transcribing in the background. Record/Stop stay visible at the bottom; scroll the lecture pane, not the whole page.
 
-A cleanup result that changed the language or removed too much is labeled as the original kept, with retry still available. A provider pause says how long automatic cleanup waits.
+A cleanup result that changed the language or removed too much is labeled as the original kept, with retry still available. Note history uses that same label when every failed cleanup on the note kept the original. A provider pause says how long automatic cleanup waits, including on a note round. The lecture list keeps refreshing while a part is still waiting to transcribe or clean up.
 
 In Lecture, type directly into **Your question · ask in class** and press **Command-Enter** or **Draft question**. This text is always the primary input. If it is empty, the selected note or cursor line supplies the thought. **Use selected note** explicitly copies a different note into the question box. **Command-Shift-Q** adds a note timestamp.
 
@@ -95,7 +95,7 @@ Suggestions appear separately; **Use this wording** applies one to your editable
 
 Question start/completion/failure, request reference, model and elapsed time are written to `runtime/server.log`; raw question text is not added to those diagnostic lines. The original thought, generated suggestion and source IDs remain in `questions.jsonl`.
 
-New lecture audio is submitted every minute, with best-effort browser backups every five seconds. If an upload fails or the tab is interrupted, reopen the tool and use **Recover audio**. Completed parts retry on their own after recording stops. A part the server rejected stays in this browser until you use **Recover audio**. Do not clear site data before recovering. The most recent unflushed audio can still be lost during an OS/browser crash; note-mode audio does not yet use this journal.
+New lecture audio is submitted every minute, with best-effort browser backups every five seconds. If an upload fails or the tab is interrupted, reopen the tool and use **Recover audio**. Completed parts retry on their own after recording stops. A part the server rejected stays in this browser until you use **Recover audio**. Do not clear site data before recovering. The most recent unflushed audio can still be lost during an OS/browser crash; note-mode audio does not yet use this journal. If saving a note take fails, the status says to record it again. Recover audio does not list that take.
 
 After approved code changes, publish a new local snapshot with `scripts/install-desktop.py --install --replace-service` using the dedicated runtime Python. This restarts only this tool's service and backs up its previous service configuration. Do not update during a recording.
 

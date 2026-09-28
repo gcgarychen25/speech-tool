@@ -115,6 +115,9 @@ class NoteView(BaseModel):
     final_revision: int = 0
     cleanup_provider_available: bool = True
     cleanup_cooldown_seconds: int = 0
+    cleanup_failed_turns: int = 0
+    cleanup_guard_turns: int = 0
+    cleanup_provider_failed_turns: int = 0
     turns: list[NoteTurnView] = Field(default_factory=list)
 
 
@@ -292,6 +295,21 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
         note = store.get_note(note_id)
         turns = [store.get(event_id) for event_id in note.turn_ids]
         duration = sum(event.duration_seconds or 0 for event in turns)
+        cleanup_failed = cleanup_guard = cleanup_provider_failed = 0
+        for event in turns:
+            raw = store.read_raw_transcript(event.id) or ""
+            cleaned = store.current_polished_transcript(event.id) or ""
+            issue = polish_quality_issue(raw, cleaned) if cleaned else None
+            cleanup_failed += int(event.polish_status == "failed" or bool(issue))
+            guarded = event.lm_version == "quality_rejected" or bool(issue)
+            provider_failed = (
+                event.polish_status == "failed"
+                and event.lm_version in PROVIDER_POLISH_FAILURES
+            )
+            if guarded:
+                cleanup_guard += 1
+            elif provider_failed:
+                cleanup_provider_failed += 1
         if not turns:
             note_state = "empty"
         elif any(event.asr_status == "failed" for event in turns):
@@ -302,7 +320,7 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             event.polish_status in {"pending", "running"} for event in turns
         ):
             note_state = "polishing"
-        elif any(event.polish_status == "failed" for event in turns):
+        elif cleanup_failed:
             note_state = "polishing_failed"
         else:
             note_state = "completed"
@@ -323,6 +341,9 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             final_revision=final_revision,
             cleanup_provider_available=bool(provider.get("available", True)),
             cleanup_cooldown_seconds=int(provider.get("cooldown_remaining_seconds") or 0),
+            cleanup_failed_turns=cleanup_failed,
+            cleanup_guard_turns=cleanup_guard,
+            cleanup_provider_failed_turns=cleanup_provider_failed,
             turns=(
                 [turn_view(event.id, include_text=False) for event in turns]
                 if include_turns

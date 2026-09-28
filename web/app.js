@@ -156,16 +156,16 @@ function cleanupBreakdown(detail) {
     providerPause: providerDown && cleanup > 0 && !guardOnly,
   };
 }
+function cleanupListStatus(kind) {
+  if (kind.providerPause) return "transcript saved · cleanup unavailable";
+  if (kind.guardOnly) return "transcript saved · original kept";
+  return "transcript saved · cleanup needs review";
+}
 function itemStatus(item) {
   if (item.kind === 'session') {
     if (item.missing_chunk_indices?.length) return `${item.missing_chunk_indices.length} audio gap · review`;
     if (item.asr_failed_chunks) return 'audio saved · transcription needs retry';
-    if (item.cleanup_failed_chunks) {
-      const kind = cleanupBreakdown(item);
-      if (kind.providerPause) return 'transcript saved · cleanup unavailable';
-      if (kind.guardOnly) return 'transcript saved · original kept';
-      return 'transcript saved · cleanup needs review';
-    }
+    if (item.cleanup_failed_chunks) return cleanupListStatus(cleanupBreakdown(item));
     if (item.transcription_pending_chunks) return 'audio saved · transcribing';
     if (item.empty_transcript_chunks) return 'some parts have no detected speech';
     if (item.cleanup_pending_chunks) return 'transcript saved · cleaning up';
@@ -173,9 +173,13 @@ function itemStatus(item) {
   }
   if (item.state === "empty") return "empty";
   if (item.state === "polishing_failed") {
-    return item.cleanup_provider_available === false
-      ? "transcript saved · cleanup unavailable"
-      : "transcript saved · cleanup needs review";
+    return cleanupListStatus(cleanupBreakdown({
+      cleanup_failed_chunks: item.cleanup_failed_turns,
+      cleanup_guard_chunks: item.cleanup_guard_turns,
+      cleanup_provider_failed_chunks: item.cleanup_provider_failed_turns,
+      cleanup_cooldown_seconds: item.cleanup_cooldown_seconds,
+      cleanup_provider_available: item.cleanup_provider_available,
+    }));
   }
   if ((item.state || "").includes("fail")) return "transcription needs retry";
   if (item.state === "transcribing") return "transcribing";
@@ -447,8 +451,9 @@ function noteCleanupPause(detail) {
   const note = state.note || {};
   const cooldown = Math.max(0, Number(note.cleanup_cooldown_seconds) || 0);
   const providerDown = note.cleanup_provider_available === false || cooldown > 0;
-  const providerFailure = detail.lm_version === "provider_unavailable" || detail.lm_version === "model_unavailable";
-  if (!providerDown || !providerFailure) return "";
+  const providerFailure = ["timeout", "error", "empty", "provider_unavailable", "model_unavailable"].includes(detail.lm_version);
+  const keptOriginal = detail.lm_version === "quality_rejected";
+  if (!providerDown || (!providerFailure && !keptOriginal && detail.polish_status !== "failed")) return "";
   return ` · paused for ${cleanupPausePhrase(cooldown)} · Retry polish tries again now`;
 }
 async function showRoundPolish(turnId) {
@@ -803,7 +808,9 @@ async function sync() {
 }
 function hasPending() {
   return state.history.some((item) =>
-    ["transcribing", "polishing", "open"].includes(item.state));
+    item.transcription_pending_chunks
+    || item.cleanup_pending_chunks
+    || ["transcribing", "polishing", "captured", "transcribed", "open"].includes(item.state));
 }
 
 function recordingUI(on) {
@@ -1226,7 +1233,10 @@ async function onRecorderStop() {
     else await saveLectureChunk(blob, recorder.captureId);
     if (state.discard && state.recordingMode === "lecture") await SpeechRecovery.remove(recorder.captureId);
   } catch (error) {
-    setStatus(`${error.message} · Use Recover audio; do not clear browser storage.`);
+    const recovery = state.recordingMode === "lecture"
+      ? "Use Recover audio; do not clear browser storage."
+      : "This note take was not saved. Record it again; Recover audio only keeps lecture parts.";
+    setStatus(`${error.message} · ${recovery}`);
     await refreshRecoveryStatus();
     return;
   } finally {

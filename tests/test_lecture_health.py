@@ -160,6 +160,53 @@ def test_provider_pause_is_visible_without_raw_text(tmp_path):
     assert note['state'] == 'empty'
 
 
+def _note_turn(store, note, raw, **updates):
+    event = store.create_from_audio(
+        b'audio', 'turn.webm', 5, kind='note_turn', note_id=note.id, turn_index=len(note.turn_ids),
+    )
+    store.attach_turn(note.id, event.id)
+    store.write_raw_transcript(event.id, raw)
+    store.update_event(event.id, lambda e: (
+        setattr(e, 'asr_status', 'completed'),
+        setattr(e, 'transcript_revision', 1),
+    ))
+    if updates:
+        store.update_event(event.id, lambda e: [setattr(e, key, value) for key, value in updates.items()])
+    return event
+
+
+def test_note_history_labels_original_kept_separately_from_provider_failure(tmp_path):
+    store, pipe, client = setup(tmp_path)
+    raw = 'This English note explains virtual tables and dynamic dispatch in the Rust programming language.'
+    kept = store.create_note('Kept original')
+    event = _note_turn(store, kept, raw, polish_status='failed', lm_version='quality_rejected')
+    listed = client.get('/api/notes').json()
+    match = next(item for item in listed if item['id'] == kept.id)
+    assert match['state'] == 'polishing_failed'
+    assert match['cleanup_failed_turns'] == 1
+    assert match['cleanup_guard_turns'] == 1
+    assert match['cleanup_provider_failed_turns'] == 0
+    assert not store.read_polished_transcript(event.id)
+
+    provider = store.create_note('Provider down')
+    _note_turn(store, provider, raw, polish_status='failed', lm_version='provider_unavailable')
+    pipe._polish_cooldown_until = time.monotonic() + 90
+    view = client.get(f'/api/notes/{provider.id}').json()
+    assert view['cleanup_guard_turns'] == 0
+    assert view['cleanup_provider_failed_turns'] == 1
+    assert view['cleanup_provider_available'] is False
+    assert view['cleanup_cooldown_seconds'] >= 60
+
+    historical = store.create_note('Historical translation')
+    translated = '这是一段中文翻译，它改变了笔记使用的语言。虚表包含函数指针，数据指针指向对象本身。'
+    old = _note_turn(store, historical, raw, polish_status='completed', polished_revision=1, lm_version='test')
+    store.write_polished_transcript(old.id, translated)
+    view = client.get(f'/api/notes/{historical.id}').json()
+    assert view['state'] == 'polishing_failed'
+    assert view['cleanup_guard_turns'] == 1
+    assert view['cleanup_provider_failed_turns'] == 0
+
+
 def test_retry_transcription_only_failed(tmp_path, monkeypatch):
     store, pipe, client = setup(tmp_path)
     session = store.create_session()
