@@ -2,6 +2,7 @@ import time
 
 from fastapi.testclient import TestClient
 import pytest
+from pathlib import Path
 
 from speech_tool.app import create_app
 from speech_tool.pipeline import Pipeline
@@ -217,3 +218,29 @@ def test_retry_transcription_only_failed(tmp_path, monkeypatch):
     monkeypatch.setattr(pipe, 'retry_asr', called.append)
     assert client.post(f'/api/sessions/{session.id}/retry-transcription').status_code == 200
     assert called == [failed.id]
+
+
+def test_transcript_path_materializes_full_asr_file(tmp_path):
+    store, pipe, client = setup(tmp_path)
+    session = store.create_session()
+    add_chunk(store, session, 0, 'First lecture part.')
+    add_chunk(store, session, 1, 'Second lecture part.')
+    result = client.post(f'/api/sessions/{session.id}/transcript-path').json()
+    path = Path(result['path'])
+    assert result['kind'] == 'asr'
+    assert result['ready'] is True
+    assert path.name == 'transcript.raw.txt'
+    assert path.parent.name == session.id
+    assert path.read_text(encoding='utf-8') == 'First lecture part.\n\nSecond lecture part.'
+    ended = client.post(f'/api/sessions/{session.id}/end').json()
+    assert ended['status'] == 'ended'
+    assert path.exists()
+
+
+def test_transcript_path_empty_until_asr(tmp_path):
+    store, pipe, client = setup(tmp_path)
+    session = store.create_session()
+    result = client.post(f'/api/sessions/{session.id}/transcript-path').json()
+    assert result['ready'] is False
+    assert Path(result['path']).read_text(encoding='utf-8') == ''
+    assert client.post('/api/sessions/missing/transcript-path').status_code == 404

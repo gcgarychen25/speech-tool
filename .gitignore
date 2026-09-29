@@ -11,6 +11,7 @@ build/
 .env
 data/
 scripts/lecture-hotkey
+scripts/calendar-current
 
 verification_artifacts/
 
@@ -48,3 +49,7 @@ event_path_index*
 *.pem
 *.key
 docs/asr_lexicon.local.json
+credentials.json
+token.json
+google-calendar.local.json
+calendar.local.json

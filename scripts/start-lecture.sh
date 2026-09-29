@@ -4,9 +4,44 @@
 # Start the user-scoped service on demand; never depends on an IDE or terminal.
 set -euo pipefail
 
-URL="http://127.0.0.1:8787/?mode=lecture&record=1"
+PORT=8787
+BASE="http://127.0.0.1:${PORT}"
+QUERY="mode=lecture&record=1"
 
-if ! curl -sf --max-time 1 "http://127.0.0.1:8787/api/health" >/dev/null; then
+# Optional local Calendar autofill (EventKit helper). Never talks to Google.
+HELPER=""
+for candidate in \
+  "$HOME/Library/Application Support/SpeechTool/runtime/bin/calendar-current" \
+  "$(cd "$(dirname "$0")" && pwd)/calendar-current"
+do
+  if [[ -x "$candidate" ]]; then
+    HELPER="$candidate"
+    break
+  fi
+done
+
+if [[ -n "$HELPER" ]]; then
+  SUGGEST="$("$HELPER" 2>/dev/null || true)"
+  COURSE="$(printf '%s' "$SUGGEST" | /usr/bin/python3 -c 'import sys,json,urllib.parse
+raw=sys.stdin.read().strip()
+if not raw:
+  raise SystemExit
+try:
+  data=json.loads(raw.splitlines()[-1])
+except Exception:
+  raise SystemExit
+course=(data.get("course") or data.get("event_title") or "").strip()
+if course:
+  print(urllib.parse.quote(course))
+' 2>/dev/null || true)"
+  if [[ -n "${COURSE:-}" ]]; then
+    QUERY="${QUERY}&course=${COURSE}"
+  fi
+fi
+
+URL="${BASE}/?${QUERY}"
+
+if ! curl -sf --max-time 1 "${BASE}/api/health" >/dev/null; then
   DOMAIN="gui/$(id -u)"
   LABEL="com.speechtool.server"
   PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
@@ -19,10 +54,10 @@ if ! curl -sf --max-time 1 "http://127.0.0.1:8787/api/health" >/dev/null; then
   fi
   launchctl kickstart "$DOMAIN/$LABEL" 2>/dev/null || true
   for attempt in {1..100}; do
-    if curl -sf --max-time 1 "http://127.0.0.1:8787/api/health" >/dev/null; then break; fi
+    if curl -sf --max-time 1 "${BASE}/api/health" >/dev/null; then break; fi
     sleep 0.2
   done
-  if ! curl -sf --max-time 1 "http://127.0.0.1:8787/api/health" >/dev/null; then
+  if ! curl -sf --max-time 1 "${BASE}/api/health" >/dev/null; then
     osascript -e 'display alert "Speech Tool could not start" message "Check ~/Library/Application Support/SpeechTool/runtime/server.log. Your saved recordings are safe."'
     exit 1
   fi
@@ -30,10 +65,11 @@ fi
 
 # Force a new Chrome tab with the query string. `open` can reuse an existing
 # Speech tab (URL already stripped), which would not start recording.
-if ! osascript <<'APPLESCRIPT'
+AS_URL=$(printf '%s' "$URL" | /usr/bin/python3 -c 'import sys; print(sys.stdin.read().replace("\\", "\\\\").replace("\"", "\\\""))')
+if ! osascript <<APPLESCRIPT
 tell application "Google Chrome"
   activate
-  open location "http://127.0.0.1:8787/?mode=lecture&record=1"
+  open location "${AS_URL}"
 end tell
 APPLESCRIPT
 then

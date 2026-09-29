@@ -512,13 +512,24 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
     @app.get("/api/health")
     def health():
         polish = pipe.polish_provider_status()
+        from speech_tool.calendar_local import helper_present
+
         return {
             "ok": True,
             "app": "speech-tool",
             "protocol": 2,
             "audio_archive_protocol": 1,
             "polish": polish,
+            "calendar_helper": helper_present(),
         }
+
+    @app.get("/api/calendar/suggest")
+    def calendar_suggest():
+        """Suggest course/title from the local macOS Calendar event overlapping now."""
+        from speech_tool.calendar_local import suggest_from_calendar
+
+        return suggest_from_calendar()
+
 
     @app.get("/api/notes")
     def list_notes():
@@ -667,6 +678,14 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
         try:
             store.end_session(session_id, body.expected_chunk_count if body else None)
             return session_view(session_id)
+        except FileNotFoundError:
+            raise HTTPException(404, "Session not found")
+
+    @app.post("/api/sessions/{session_id}/transcript-path")
+    def session_transcript_path(session_id: str):
+        """Refresh the session-level full ASR transcript file and return its path."""
+        try:
+            return store.materialize_session_raw_transcript(session_id)
         except FileNotFoundError:
             raise HTTPException(404, "Session not found")
 

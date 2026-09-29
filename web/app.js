@@ -39,6 +39,7 @@ const state = {
   mode: localStorage.getItem("speech-mode") || "note",
   selectedKind: "note",
   selectedId: null,
+  bootNewLecture: false,
   note: null,
   session: null,
   history: [],
@@ -786,7 +787,9 @@ async function sync() {
       ...sessions.map((item) => ({ ...item, kind: "session" })),
     ].sort((a, b) => (a.updated_at || a.created_at) < (b.updated_at || b.created_at) ? 1 : -1);
     renderHistory();
-    if (!state.selectedId && !state.recording) {
+    // Hotkey / ?record=1 starts a new lecture; do not seed the previous session
+    // into Course (that was overwriting Calendar autofill).
+    if (!state.selectedId && !state.recording && !state.bootNewLecture) {
       const wanted = state.mode === "note" ? "note" : "session";
       const recent = state.history.find((item) => item.kind === wanted);
       if (recent) {
@@ -861,6 +864,28 @@ function lectureSessionTitle() {
     minute: "2-digit",
   });
 }
+async function applyCalendarSuggestion(options = {}) {
+  const force = Boolean(options.force);
+  const fromQuery = typeof options.courseHint === "string" ? options.courseHint.trim() : "";
+  if (fromQuery && (force || !courseEl.value.trim())) {
+    courseEl.value = fromQuery;
+  }
+  if (courseEl.value.trim() && !force) return null;
+  try {
+    const hint = await api("/api/calendar/suggest", { signal: AbortSignal.timeout(9000) });
+    if (hint?.course && (force || !courseEl.value.trim())) {
+      courseEl.value = hint.course;
+      setStatus(`Course from Calendar · ${hint.course}`);
+    } else if (hint && hint.authorized === false && hint.detail === "calendar_access_denied") {
+      setStatus("Calendar access denied. Enable Speech Tool under System Settings → Privacy & Security → Calendars.");
+    } else if (hint && hint.detail === "calendar_helper_missing") {
+      setStatus("Calendar helper not installed. Re-run install-desktop.py --install after building calendar-current.");
+    }
+    return hint;
+  } catch (_) {
+    return null;
+  }
+}
 async function prepareRecordingTarget(options = {}) {
   const forceNew = Boolean(options.forceNew);
   await flushFinalSave();
@@ -886,8 +911,14 @@ async function prepareRecordingTarget(options = {}) {
     state.chunkIndex = Math.max(detail.next_chunk_index ?? Math.max(0, ...(detail.chunks || []).map(c => (c.chunk_index ?? -1) + 1)),
       ...localRows.filter(row => row.sessionId === existing.id && row.id !== state.recorder?.captureId).map(row => (row.index ?? -1) + 1));
     state.recordingOffset = detail.duration_seconds || 0;
+    state.bootNewLecture = false;
     await renderSession(detail, true);
   } else {
+    await applyCalendarSuggestion({
+      courseHint: options.courseHint,
+      // New lecture from Control-Option-L must keep Calendar, not the prior session's course.
+      force: Boolean(forceNew),
+    });
     const session = await api("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -902,6 +933,7 @@ async function prepareRecordingTarget(options = {}) {
     state.chunkIndex = 0;
     state.recordingOffset = 0;
     state.uploads = [];
+    state.bootNewLecture = false;
     await renderSession(session, true);
   }
   await sync();
@@ -974,7 +1006,10 @@ async function startRecording(options = {}) {
     }
   }, 200);
   setStatus(state.recordingMode === "note" ? "Recording note" : "Recording lecture");
-  state.captureReady = prepareRecordingTarget({ forceNew: Boolean(options.forceNew) });
+  state.captureReady = prepareRecordingTarget({
+    forceNew: Boolean(options.forceNew),
+    courseHint: options.courseHint,
+  });
   try {
     await state.captureReady;
     setStatus(state.recordingMode === "note"
@@ -1150,6 +1185,7 @@ function renderLectureHealth(detail) {
   el('lectureHealthDetail').textContent = parts.join(' · ');
   el('retryTranscription').hidden = !failed;
   el('retryCleanup').hidden = !cleanup;
+  el('copyTranscriptPath').hidden = !(detail.chunk_count > 0);
   el('cleanupSummary').textContent = providerPause
     ? `Cleanup is paused for ${cleanupPausePhrase(cooldown)} after repeated provider failures. Original transcript text stays available. Retry cleanup tries again now. Your notes are unchanged.`
     : guardOnly
@@ -1606,10 +1642,13 @@ const autoRecord = bootParams.get("record") === "1";
 const autoLecture = autoRecord
   || bootParams.get("mode") === "lecture"
   || bootParams.get("lecture") === "1";
+const bootCourse = (bootParams.get("course") || "").trim();
 if (autoLecture) {
   state.mode = "lecture";
   applyMode();
 }
+if (autoRecord) state.bootNewLecture = true;
+if (bootCourse) courseEl.value = bootCourse;
 if (autoLecture || autoRecord) {
   history.replaceState({}, "", location.pathname);
 }
@@ -1622,11 +1661,14 @@ function showCaptureHint() {
 }
 el('audioSource').onchange = () => {localStorage.setItem('speech-audio-source', el('audioSource').value); showCaptureHint();};
 showCaptureHint();
-sync().then(() => {
+sync().then(async () => {
+  if (autoLecture && !courseEl.value.trim()) {
+    await applyCalendarSuggestion({ courseHint: bootCourse });
+  }
   if (!autoRecord) return;
   if (el('audioSource').value === 'meeting') {
     setStatus('Ready for your meeting. Click Record to authorize meeting audio sharing.');
-  } else startRecording({ forceLecture: true, forceNew: true });
+  } else startRecording({ forceLecture: true, forceNew: true, courseHint: bootCourse || courseEl.value });
 });
 setInterval(() => {
   if (hasPending() || state.recording) sync();
@@ -1754,6 +1796,19 @@ el('retryTranscription').onclick = async () => {
     await sync();
   } catch (error) { setStatus(error.message); }
   finally { el('retryTranscription').disabled = false; }
+};
+el('copyTranscriptPath').onclick = async () => {
+  if (state.selectedKind !== 'session' || !state.selectedId) return;
+  const btn = el('copyTranscriptPath');
+  btn.disabled = true;
+  try {
+    const result = await api(`/api/sessions/${state.selectedId}/transcript-path`, { method: 'POST' });
+    await navigator.clipboard.writeText(result.path);
+    setStatus(result.ready
+      ? `Transcript path copied · ${result.path}`
+      : `Path copied · file is empty until ASR finishes · ${result.path}`);
+  } catch (error) { setStatus(error.message); }
+  finally { btn.disabled = false; }
 };
 async function automaticRecovery() {
   await refreshRecoveryStatus();

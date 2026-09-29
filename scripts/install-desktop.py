@@ -94,6 +94,25 @@ def main():
     }))
     if subprocess.run(["launchctl", "print", f"{domain}/{LABEL}"], capture_output=True).returncode:
         subprocess.run(["launchctl", "bootstrap", domain, str(plist)], check=True)
+    # Local Calendar helper (EventKit). Never copies Google OAuth credentials.
+    runtime_bin = runtime / "bin"
+    runtime_bin.mkdir(parents=True, exist_ok=True)
+    calendar_helper = ROOT / "scripts/calendar-current"
+    calendar_plist = ROOT / "scripts/calendar-current.Info.plist"
+    calendar_swift = ROOT / "scripts/calendar-current.swift"
+    if (not calendar_helper.exists() or calendar_swift.exists()) and shutil.which("swiftc") and calendar_swift.exists():
+        # Rebuild so EventKit usage strings / bundle id stay current.
+        cmd = ["swiftc", "-O", "-o", str(calendar_helper), str(calendar_swift)]
+        if calendar_plist.exists():
+            cmd += ["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", str(calendar_plist)]
+        subprocess.run(cmd, check=False)
+        if calendar_helper.exists():
+            subprocess.run(["codesign", "-s", "-", "--force", "--identifier", "com.speechtool.calendar-current", str(calendar_helper)], check=False)
+    if calendar_helper.exists():
+        dest = runtime_bin / "calendar-current"
+        shutil.copy2(calendar_helper, dest)
+        dest.chmod(0o755)
+        subprocess.run(["codesign", "-s", "-", "--force", "--identifier", "com.speechtool.calendar-current", str(dest)], check=False)
     # Existing global hotkey must also survive Desktop file eviction.
     hotkey_plist = plist.with_name("com.speechtool.lecture-hotkey.plist")
     hotkey_binary = ROOT / "scripts/lecture-hotkey"
@@ -101,8 +120,7 @@ def main():
         hotkey = plistlib.loads(hotkey_plist.read_bytes())
         if hotkey.get("Label") != "com.speechtool.lecture-hotkey":
             sys.exit("Unexpected hotkey label; left unchanged")
-        dest = runtime / "bin/lecture-hotkey"
-        dest.parent.mkdir(exist_ok=True)
+        dest = runtime_bin / "lecture-hotkey"
         shutil.copy2(hotkey_binary, dest)
         dest.chmod(0o755)
         arguments = [str(dest), str(release / "scripts/start-lecture.sh")]

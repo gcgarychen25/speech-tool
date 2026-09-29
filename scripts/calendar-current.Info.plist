@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.speechtool.calendar-current</string>
+  <key>CFBundleName</key>
+  <string>Speech Tool Calendar</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>Speech Tool reads the event happening now to prefills the lecture Course field. Events stay on this Mac.</string>
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>Speech Tool reads the event happening now to prefills the lecture Course field. Events stay on this Mac.</string>
+</dict>
+</plist>

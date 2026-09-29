@@ -10,7 +10,7 @@ Personal glossary corrections belong in ignored `docs/asr_lexicon.local.json`.
 
 macOS-first local speech ingestion: capture, persist raw audio, local ASR, LM polish, durable history.
 
-Open **Speech Tool** from Spotlight, or press **Control-Option-L** to open a new lecture and start recording. Cursor and a terminal are not required. Chrome must have microphone permission once.
+Open **Speech Tool** from Spotlight, or press **Control-Option-L** to open a new lecture and start recording. Cursor and a terminal are not required. Chrome must have microphone permission once. When Calendar access is allowed, Control-Option-L prefills **Course** from the event that overlaps now (local macOS Calendar only; no Google OAuth).
 
 ## Daily use
 
@@ -128,4 +128,4 @@ Under `~/Library/Application Support/SpeechTool/`:
 
 - `events/<id>/` — `audio.*` (never overwritten), `transcript.raw.txt`, `transcript.polished.txt`, `event.json`
 - `notes/<id>/` — `note.json`, `note.final.edited.txt` (canonical draft; Clear empties this only)
-- `sessions/<id>/` — lecture chunks, `listener_notes.txt`, `questions.jsonl`
+- `sessions/<id>/` — lecture chunks, `listener_notes.txt`, `questions.jsonl`, and after recording `transcript.raw.txt` (assembled full ASR snapshot; use **Copy transcript path** in the UI)

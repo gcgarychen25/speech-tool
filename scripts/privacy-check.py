@@ -15,7 +15,8 @@ PATTERNS = {
     'literal credential': re.compile(rb'(?i)(?:api[_-]?key|password|secret|token)\s*[:=]\s*[\x27\x22][A-Za-z0-9_+./=-]{16,}[\x27\x22]'),
 }
 PRIVATE_DIRS = {'data', 'recordings', 'events', 'sessions', 'notes', 'audio_archive', 'runtime', 'backups', '.private', 'local', 'verification_artifacts', '.venv', '__pycache__'}
-PRIVATE_NAMES = {'.cursorrules', 'AGENTS.local.md', 'asr_lexicon.local.json', 'clean_transcript.py'}
+PRIVATE_NAMES = {'.cursorrules', 'AGENTS.local.md', 'asr_lexicon.local.json', 'clean_transcript.py',
+                 'credentials.json', 'token.json', 'google-calendar.local.json', 'calendar.local.json'}
 PRIVATE_SUFFIXES = {'.wav', '.webm', '.flac', '.mp3', '.m4a', '.ogg', '.opus', '.log', '.db', '.sqlite', '.zip', '.gz', '.pem', '.key', '.pyc'}
 
 

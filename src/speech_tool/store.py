@@ -718,7 +718,33 @@ class EventStore:
         session.status = "ended"
         session.ended_at = datetime.now(timezone.utc).isoformat()
         self._write_session(session)
+        # Derived full ASR file for Finder / editors; chunk files remain source of truth.
+        self.materialize_session_raw_transcript(session_id)
         return session
+
+    def session_raw_transcript_path(self, session_id: str) -> Path:
+        return self._session_dir(session_id) / RAW_TRANSCRIPT
+
+    def materialize_session_raw_transcript(self, session_id: str) -> dict:
+        """Write the assembled ASR lecture text to one session-level file.
+
+        Chunk ``events/<id>/transcript.raw.txt`` files remain the durable source
+        of truth. This file is a convenience snapshot for opening or copying a
+        path after class; it is regenerated on demand and when a session ends.
+        """
+        self.get_session(session_id)
+        text = self.session_raw_text(session_id, skip_noise=True)
+        path = self.session_raw_transcript_path(session_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".txt.tmp")
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(path)
+        return {
+            "path": str(path.resolve()),
+            "bytes": len(text.encode("utf-8")),
+            "ready": bool(text.strip()),
+            "kind": "asr",
+        }
 
     @session_locked
     def reopen_session(self, session_id: str) -> LectureSession:

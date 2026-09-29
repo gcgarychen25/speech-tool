@@ -82,5 +82,7 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "recorder.start(5000)" in javascript
     assert "speech-microphone" in javascript
     assert "SpeechRecovery.remove" in javascript
+    assert 'id="copyTranscriptPath"' in html
+    assert "/api/sessions/${state.selectedId}/transcript-path" in javascript
     assert "overflow: hidden" in html
     assert "position: sticky" in html
