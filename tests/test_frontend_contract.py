@@ -50,6 +50,17 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "quality_rejected" in javascript
     assert "Completed parts retry automatically" in javascript
     assert "will not retry until you use Recover audio" in javascript
+    assert "not marked ended yet" in javascript
+    assert "still transcribing" in javascript
+    assert "need transcription retry" in javascript
+    assert "transcript saved · cleaning up" in javascript
+    assert "return item.status === 'open' ? 'open' : 'ended'" in javascript
+    endLoop = javascript.split("async function finishStoppedLectures", 1)[1].split("async function ", 1)[0]
+    assert "error.status === 404" in endLoop
+    assert "pending += 1" in endLoop
+    stop = javascript.split("async function saveLectureChunk", 1)[1].split("async function ", 1)[0]
+    assert "state.stopEndPending" in stop
+    assert "lectureEndPendingStatus" in stop
     assert "cannot coordinate the microphone" in javascript
     assert "Audio did not start" in (ROOT / "web" / "capture.js").read_text(encoding="utf-8")
     assert "Copy note" in html

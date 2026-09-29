@@ -86,6 +86,7 @@ const state = {
   releaseCaptureLock: null,
   captureLockReason: "",
   autoStopped: false,
+  stopEndPending: 0,
 };
 
 function fmt(value) {
@@ -170,6 +171,7 @@ function itemStatus(item) {
     if (item.empty_transcript_chunks) return 'some parts have no detected speech';
     if (item.cleanup_pending_chunks) return 'transcript saved · cleaning up';
     if (item.chunk_count) return 'transcript saved';
+    return item.status === 'open' ? 'open' : 'ended';
   }
   if (item.state === "empty") return "empty";
   if (item.state === "polishing_failed") {
@@ -185,7 +187,8 @@ function itemStatus(item) {
   if (item.state === "transcribing") return "transcribing";
   if (item.status === "open") return "open";
   if (item.polish_status === "failed") return "polish failed";
-  if (["pending", "running"].includes(item.polish_status) || item.state === "polishing") {
+  if (item.state === "polishing") return "transcript saved · cleaning up";
+  if (["pending", "running"].includes(item.polish_status)) {
     return "polishing";
   }
   if (item.polish_skipped) return "polish skipped";
@@ -1119,6 +1122,11 @@ function renderLectureHealth(detail) {
     : detail.empty_transcript_chunks ? 'Audio saved · some parts have no detected speech'
     : 'Transcript saved';
   const parts = [`${detail.chunk_count || 0} parts uploaded`, `${detail.transcribed_chunks ?? detail.chunk_count ?? 0} transcribed`];
+  if (detail.transcription_pending_chunks) {
+    const pendingAsr = detail.transcription_pending_chunks;
+    parts.push(`${pendingAsr} part${pendingAsr === 1 ? '' : 's'} still transcribing`);
+  }
+  if (failed) parts.push(`${failed} part${failed === 1 ? '' : 's'} need transcription retry`);
   if (detail.empty_transcript_chunks) parts.push(`${detail.empty_transcript_chunks} parts finished without transcript text. Check your audio source; a missing speaker signal cannot be restored by text cleanup`);
   if (missing.length) parts.push(`Missing part${missing.length === 1 ? '' : 's'}: ${missing.slice(0, 8).map(i => i + 1).join(', ')}${missing.length > 8 ? '…' : ''}. Check Recover audio in the original browser`);
   if (duplicate.length) parts.push('Duplicate part numbers need review');
@@ -1152,14 +1160,30 @@ function renderLectureHealth(detail) {
 function rememberStoppedLecture(sessionId, expected) {
   localStorage.setItem(`speech-stop-${sessionId}`, JSON.stringify({expected_chunk_count: expected}));
 }
+function lectureEndPendingStatus(base, pending) {
+  if (!pending) return base;
+  const which = pending === 1 ? "A lecture is" : "Lectures are";
+  return `${base} ${which} not marked ended yet; that retry continues automatically.`;
+}
 async function finishStoppedLectures() {
+  let pending = 0;
   for (const key of Object.keys(localStorage).filter(key => key.startsWith('speech-stop-'))) {
     const sid = key.slice('speech-stop-'.length);
     if (state.recording && sid === state.liveSessionId) continue;
     const body = localStorage.getItem(key);
-    await api(`/api/sessions/${sid}/end`, {method:'POST', headers:{'Content-Type':'application/json'}, body, signal:AbortSignal.timeout(5000)});
-    if (localStorage.getItem(key) === body) localStorage.removeItem(key);
+    if (!body) continue;
+    try {
+      await api(`/api/sessions/${sid}/end`, {method:'POST', headers:{'Content-Type':'application/json'}, body, signal:AbortSignal.timeout(5000)});
+      if (localStorage.getItem(key) === body) localStorage.removeItem(key);
+    } catch (error) {
+      if (error.status === 404 && localStorage.getItem(key) === body) {
+        localStorage.removeItem(key);
+        continue;
+      }
+      pending += 1;
+    }
   }
+  return pending;
 }
 async function saveLectureChunk(blob, captureId) {
   if (state.captureReady) await state.captureReady;
@@ -1186,10 +1210,16 @@ async function saveLectureChunk(blob, captureId) {
   }
   // Ending capture does not wait behind network retries. The journal and
   // stop marker survive reload; completeness is tracked independently.
-  try { await finishStoppedLectures(); }
+  // A failed end request must not look like the audio itself was lost.
+  let unmarked = 0;
+  try { unmarked = await finishStoppedLectures(); }
   finally { state.liveSessionId = null; }
+  state.stopEndPending = unmarked;
   upload.then(() => sync()).catch(() => refreshRecoveryStatus());
-  setStatus('Recording stopped · audio uploads and transcript processing continue in the background.');
+  setStatus(lectureEndPendingStatus(
+    'Recording stopped · audio uploads and transcript processing continue in the background.',
+    unmarked,
+  ));
   await sync();
 }
 async function handleDiscard() {
@@ -1213,7 +1243,14 @@ async function handleDiscard() {
     } else {
       statusText = "In-progress part discarded. Earlier parts of this lecture stay saved.";
       await Promise.allSettled(state.uploads);
-      await api(`/api/sessions/${state.liveSessionId}/end`, { method: "POST" });
+      try {
+        await api(`/api/sessions/${state.liveSessionId}/end`, { method: "POST" });
+      } catch (error) {
+        if (error.status !== 404) {
+          rememberStoppedLecture(state.liveSessionId, state.chunkIndex);
+          statusText = lectureEndPendingStatus(statusText, 1);
+        }
+      }
     }
     state.liveSessionId = null;
     await sync();
@@ -1242,7 +1279,12 @@ async function onRecorderStop() {
   } finally {
     if (finalStop) state.releaseCaptureLock?.();
   }
-  if (state.autoStopped) setStatus("Stopped after 2 hours. Audio uploads and transcript processing continue in the background.");
+  if (state.autoStopped) {
+    setStatus(lectureEndPendingStatus(
+      "Stopped after 2 hours. Audio uploads and transcript processing continue in the background.",
+      state.stopEndPending,
+    ));
+  }
 }
 
 noteFinal.addEventListener("input", () => {
@@ -1683,13 +1725,21 @@ async function recoverSavedAudio(manual = false) {
         if (manual) setStatus(`Recovery needs attention: ${error.message}. Local audio retained.`);
       }
     }
-    if (manual) await finishStoppedLectures();
+    let endPending = 0;
+    if (manual) endPending = await finishStoppedLectures();
     else if (!state.recording && navigator.locks) {
-      await navigator.locks.request('speech-microphone', {ifAvailable:true}, async lock => {
-        if (lock) await finishStoppedLectures();
-      });
+      endPending = await navigator.locks.request('speech-microphone', {ifAvailable:true}, async lock => (
+        lock ? finishStoppedLectures() : 0
+      )) || 0;
     }
-    if (recovered) setStatus(`${recovered} recording part${recovered === 1 ? '' : 's'} recovered to the original lecture${failed ? ` · ${failed} still need attention` : ''}.`);
+    if (recovered) {
+      setStatus(lectureEndPendingStatus(
+        `${recovered} recording part${recovered === 1 ? '' : 's'} recovered to the original lecture${failed ? ` · ${failed} still need attention` : ''}.`,
+        endPending,
+      ));
+    } else if (manual && endPending && !failed) {
+      setStatus(lectureEndPendingStatus("Saved audio stays on the server.", endPending));
+    }
     await sync();
   } catch (error) { setStatus(`Recovery pending: ${error.message}. Local audio retained.`); }
   finally { recoveryBusy = false; if (manual) state.releaseCaptureLock?.(); await refreshRecoveryStatus(); }
