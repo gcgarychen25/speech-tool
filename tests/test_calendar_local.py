@@ -54,6 +54,9 @@ def test_frontend_calendar_autofill_contract():
     assert "bootCourse" in javascript
     assert "bootNewLecture" in javascript
     assert "force: Boolean(forceNew)" in javascript
+    assert "historyMetaIsSerious" in javascript
+    assert "cleanup unfinished" in javascript
+    assert "cleanup needs review" not in javascript
     assert "calendar-current" in start
     assert "course=" in start
-    assert "app.js?v=24" in html
+    assert "app.js?v=25" in html

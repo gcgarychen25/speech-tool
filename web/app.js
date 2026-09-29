@@ -161,7 +161,7 @@ function cleanupBreakdown(detail) {
 function cleanupListStatus(kind) {
   if (kind.providerPause) return "transcript saved · cleanup unavailable";
   if (kind.guardOnly) return "transcript saved · original kept";
-  return "transcript saved · cleanup needs review";
+  return "transcript saved · cleanup unfinished";
 }
 function itemStatus(item) {
   if (item.kind === 'session') {
@@ -187,13 +187,24 @@ function itemStatus(item) {
   if ((item.state || "").includes("fail")) return "transcription needs retry";
   if (item.state === "transcribing") return "transcribing";
   if (item.status === "open") return "open";
-  if (item.polish_status === "failed") return "polish failed";
+  if (item.polish_status === "failed") return "transcript saved · cleanup unfinished";
   if (item.state === "polishing") return "transcript saved · cleaning up";
   if (["pending", "running"].includes(item.polish_status)) {
     return "polishing";
   }
-  if (item.polish_skipped) return "polish skipped";
+  if (item.polish_skipped) return "transcript saved · cleanup unfinished";
   return "ready";
+}
+function historyMetaIsSerious(item, status) {
+  if (item.kind === "session") {
+    return Boolean(item.asr_failed_chunks || item.missing_chunk_indices?.length);
+  }
+  // Notes: only ASR/transcription failures are urgent; polish failures are optional.
+  return Boolean(
+    item.state === "transcription_failed"
+    || status.includes("transcription needs retry")
+    || status.includes("transcription failed")
+  );
 }
 function rebaseNote(baseText, current, next) {
   if (current === baseText) return next;
@@ -542,8 +553,9 @@ function renderHistory() {
     button.innerHTML = `<span class="when"></span><span class="meta"></span>`;
     button.querySelector(".when").textContent = title;
     const meta = button.querySelector(".meta");
-    meta.textContent = `${fmt(item.duration_seconds)} · ${count} · ${itemStatus(item)}`;
-    if ((item.state || "").includes("fail")) meta.classList.add("fail");
+    const status = itemStatus(item);
+    meta.textContent = `${fmt(item.duration_seconds)} · ${count} · ${status}`;
+    if (historyMetaIsSerious(item, status)) meta.classList.add("fail");
     const del = document.createElement("button");
     del.type = "button";
     del.className = "hist-del";
@@ -1146,13 +1158,14 @@ function renderLectureHealth(detail) {
   const duplicate = detail.duplicate_chunk_indices || [];
   const kind = cleanupBreakdown(detail);
   const { cleanup, guard, providerFailed, cooldown, providerDown, guardOnly, providerPause } = kind;
-  el('lectureHealth').dataset.attention = Boolean(missing.length || failed || cleanup || duplicate.length || detail.empty_transcript_chunks || providerDown);
+  // Red/attention only for capture/ASR problems or paused provider; optional unfinished cleanup stays calm.
+  el('lectureHealth').dataset.attention = Boolean(missing.length || failed || duplicate.length || detail.empty_transcript_chunks || providerPause);
   el('lectureHealthTitle').textContent = !detail.chunk_count ? 'Ready to record'
     : missing.length ? 'Some audio has not reached this lecture'
     : failed ? 'Audio saved · transcription needs retry'
     : providerPause ? 'Transcript saved · AI cleanup unavailable'
     : guardOnly ? 'Transcript saved · original kept'
-    : cleanup ? 'Transcript saved · AI cleanup needs review'
+    : cleanup ? 'Transcript saved · AI cleanup unfinished'
     : detail.transcription_pending_chunks ? 'Audio saved · transcribing'
     : detail.empty_transcript_chunks ? 'Audio saved · some parts have no detected speech'
     : 'Transcript saved';
