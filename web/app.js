@@ -167,9 +167,10 @@ function itemStatus(item) {
   if (item.kind === 'session') {
     if (item.missing_chunk_indices?.length) return `${item.missing_chunk_indices.length} audio gap · review`;
     if (item.asr_failed_chunks) return 'audio saved · transcription needs retry';
-    if (item.cleanup_failed_chunks) return cleanupListStatus(cleanupBreakdown(item));
     if (item.transcription_pending_chunks) return 'audio saved · transcribing';
     if (item.empty_transcript_chunks) return 'some parts have no detected speech';
+    if (item.duplicate_chunk_indices?.length) return 'duplicate part numbers · review';
+    if (item.cleanup_failed_chunks) return cleanupListStatus(cleanupBreakdown(item));
     if (item.cleanup_pending_chunks) return 'transcript saved · cleaning up';
     if (item.chunk_count) return 'transcript saved';
     return item.status === 'open' ? 'open' : 'ended';
@@ -197,7 +198,11 @@ function itemStatus(item) {
 }
 function historyMetaIsSerious(item, status) {
   if (item.kind === "session") {
-    return Boolean(item.asr_failed_chunks || item.missing_chunk_indices?.length);
+    return Boolean(
+      item.asr_failed_chunks
+      || item.missing_chunk_indices?.length
+      || item.duplicate_chunk_indices?.length
+    );
   }
   // Notes: only ASR/transcription failures are urgent; polish failures are optional.
   return Boolean(
@@ -549,7 +554,7 @@ function renderHistory() {
       : `${item.course ? `${item.course} · ` : "Lecture · "}${item.title || ""}`;
     const count = item.kind === "note"
       ? `${item.turn_count} turn${item.turn_count === 1 ? "" : "s"}`
-      : `${item.chunk_count} chunks`;
+      : `${item.chunk_count} part${item.chunk_count === 1 ? "" : "s"}`;
     button.innerHTML = `<span class="when"></span><span class="meta"></span>`;
     button.querySelector(".when").textContent = title;
     const meta = button.querySelector(".meta");
@@ -1026,7 +1031,7 @@ async function startRecording(options = {}) {
     await state.captureReady;
     setStatus(state.recordingMode === "note"
       ? `Recording round ${(state.note?.turn_count || 0) + 1}`
-      : `Recording lecture · chunk ${state.chunkIndex + 1}`);
+      : `Recording lecture · part ${state.chunkIndex + 1}`);
   } catch (error) {
     setStatus(error.message);
   }
@@ -1160,14 +1165,17 @@ function renderLectureHealth(detail) {
   const { cleanup, guard, providerFailed, cooldown, providerDown, guardOnly, providerPause } = kind;
   // Red/attention only for capture/ASR problems or paused provider; optional unfinished cleanup stays calm.
   el('lectureHealth').dataset.attention = Boolean(missing.length || failed || duplicate.length || detail.empty_transcript_chunks || providerPause);
+  // Capture and transcription come before optional cleanup, so a later part
+  // still transcribing is not described as a saved transcript.
   el('lectureHealthTitle').textContent = !detail.chunk_count ? 'Ready to record'
     : missing.length ? 'Some audio has not reached this lecture'
     : failed ? 'Audio saved · transcription needs retry'
+    : detail.transcription_pending_chunks ? 'Audio saved · transcribing'
+    : detail.empty_transcript_chunks ? 'Audio saved · some parts have no detected speech'
+    : duplicate.length ? 'Duplicate part numbers need review'
     : providerPause ? 'Transcript saved · AI cleanup unavailable'
     : guardOnly ? 'Transcript saved · original kept'
     : cleanup ? 'Transcript saved · AI cleanup unfinished'
-    : detail.transcription_pending_chunks ? 'Audio saved · transcribing'
-    : detail.empty_transcript_chunks ? 'Audio saved · some parts have no detected speech'
     : 'Transcript saved';
   const parts = [`${detail.chunk_count || 0} parts uploaded`, `${detail.transcribed_chunks ?? detail.chunk_count ?? 0} transcribed`];
   if (detail.transcription_pending_chunks) {
@@ -1243,7 +1251,7 @@ async function saveLectureChunk(blob, captureId) {
   if (continuing) {
     state.rotating = false;
     armRecorder();
-    setStatus(`Recording lecture · chunk ${state.chunkIndex + 1}`);
+    setStatus(`Recording lecture · part ${state.chunkIndex + 1}`);
   }
   const row = { id: captureId, blob, sessionId, index, complete: true, createdAt: Date.now() };
   if (!continuing) rememberStoppedLecture(sessionId, state.chunkIndex);

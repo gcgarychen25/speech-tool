@@ -53,6 +53,16 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "not marked ended yet" in javascript
     assert "still transcribing" in javascript
     assert "need transcription retry" in javascript
+    session_status = javascript.split("if (item.kind === 'session')", 1)[1].split("if (item.state === \"empty\")", 1)[0]
+    assert session_status.index("transcription_pending_chunks") < session_status.index("cleanup_failed_chunks")
+    assert session_status.index("empty_transcript_chunks") < session_status.index("cleanup_failed_chunks")
+    assert "duplicate part numbers · review" in session_status
+    health_title = javascript.split("lectureHealthTitle').textContent", 1)[1].split("const parts", 1)[0]
+    assert health_title.index("transcription_pending_chunks") < health_title.index("providerPause")
+    assert health_title.index("empty_transcript_chunks") < health_title.index("AI cleanup unfinished")
+    assert "Duplicate part numbers need review" in health_title
+    assert "Recording lecture · part" in javascript
+    assert "Recording lecture · chunk" not in javascript
     assert "transcript saved · cleaning up" in javascript
     assert "return item.status === 'open' ? 'open' : 'ended'" in javascript
     endLoop = javascript.split("async function finishStoppedLectures", 1)[1].split("async function ", 1)[0]
