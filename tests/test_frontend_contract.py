@@ -61,6 +61,17 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert health_title.index("transcription_pending_chunks") < health_title.index("providerPause")
     assert health_title.index("empty_transcript_chunks") < health_title.index("AI cleanup unfinished")
     assert "Duplicate part numbers need review" in health_title
+    assert health_title.index("AI cleanup unfinished") < health_title.index("cleanup_pending_chunks")
+    assert "Transcript saved · cleaning up" in health_title
+    turn = javascript.split("function turnStatus", 1)[1].split("function ", 1)[0]
+    assert "polish skipped" not in turn
+    assert "transcript saved · cleaning up" in turn
+    assert "transcript saved · cleanup needs retry" in turn
+    chunk = javascript.split("async function saveLectureChunk", 1)[1].split("async function ", 1)[0]
+    assert chunk.index("continueLectureCapture") < chunk.index("await state.captureReady")
+    assert "Earlier part stays on this device" in chunk
+    assert "localAudioRetained" in chunk
+    assert "could not join a lecture" in javascript
     assert "Recording lecture · part" in javascript
     assert "Recording lecture · chunk" not in javascript
     assert "transcript saved · cleaning up" in javascript

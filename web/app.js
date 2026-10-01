@@ -88,6 +88,7 @@ const state = {
   captureLockReason: "",
   autoStopped: false,
   stopEndPending: 0,
+  captureReadyState: "pending",
 };
 
 function fmt(value) {
@@ -136,10 +137,11 @@ function turnStatus(turn) {
       ? "transcript saved · cleanup unavailable"
       : "transcript saved · cleanup needs retry";
   }
-  if (["pending", "running"].includes(turn.polish_status)) return "polishing";
-  if (["timeout", "error", "empty", "provider_unavailable", "model_unavailable"].includes(turn.lm_version)) {
-    return "polish skipped";
+  if (["pending", "running"].includes(turn.polish_status)) return "transcript saved · cleaning up";
+  if (turn.lm_version === "provider_unavailable" || turn.lm_version === "model_unavailable") {
+    return "transcript saved · cleanup unavailable";
   }
+  if (["timeout", "error", "empty"].includes(turn.lm_version)) return "transcript saved · cleanup needs retry";
   return "ready";
 }
 function polishRetryVisible(detail) {
@@ -191,7 +193,7 @@ function itemStatus(item) {
   if (item.polish_status === "failed") return "transcript saved · cleanup unfinished";
   if (item.state === "polishing") return "transcript saved · cleaning up";
   if (["pending", "running"].includes(item.polish_status)) {
-    return "polishing";
+    return "transcript saved · cleaning up";
   }
   if (item.polish_skipped) return "transcript saved · cleanup unfinished";
   return "ready";
@@ -1004,6 +1006,7 @@ async function startRecording(options = {}) {
   state.discard = false;
   state.rotating = false;
   state.autoStopped = false;
+  state.captureReadyState = "pending";
   armRecorder();
   state.startedAt = Date.now();
   recordingUI(true);
@@ -1026,7 +1029,16 @@ async function startRecording(options = {}) {
   state.captureReady = prepareRecordingTarget({
     forceNew: Boolean(options.forceNew),
     courseHint: options.courseHint,
-  });
+  }).then(
+    (value) => {
+      state.captureReadyState = "ok";
+      return value;
+    },
+    (error) => {
+      state.captureReadyState = "failed";
+      throw error;
+    },
+  );
   try {
     await state.captureReady;
     setStatus(state.recordingMode === "note"
@@ -1141,11 +1153,15 @@ function cleanupPausePhrase(seconds) {
 }
 function recoveryQueueDetail(rows) {
   const partial = rows.filter((row) => !row.complete);
-  const blocked = rows.filter((row) => row.complete && blockedCaptures.has(row.id));
-  const waiting = rows.filter((row) => row.complete && !blockedCaptures.has(row.id));
+  const unassigned = rows.filter((row) => row.complete && !row.sessionId);
+  const blocked = rows.filter((row) => row.complete && row.sessionId && blockedCaptures.has(row.id));
+  const waiting = rows.filter((row) => row.complete && row.sessionId && !blockedCaptures.has(row.id));
   const bits = [`${rows.length} recording part${rows.length === 1 ? "" : "s"} saved in this browser`];
   if (partial.length) {
     bits.push(`${partial.length} interrupted part${partial.length === 1 ? "" : "s"} need review. Use Recover audio after stopping`);
+  }
+  if (unassigned.length) {
+    bits.push(`${unassigned.length} part${unassigned.length === 1 ? "" : "s"} could not join a lecture. Use Recover audio after stopping to download ${unassigned.length === 1 ? "it" : "them"}`);
   }
   if (blocked.length) {
     bits.push(`${blocked.length} part${blocked.length === 1 ? " was" : "s were"} rejected by the server and will not retry until you use Recover audio`);
@@ -1176,6 +1192,7 @@ function renderLectureHealth(detail) {
     : providerPause ? 'Transcript saved · AI cleanup unavailable'
     : guardOnly ? 'Transcript saved · original kept'
     : cleanup ? 'Transcript saved · AI cleanup unfinished'
+    : detail.cleanup_pending_chunks ? 'Transcript saved · cleaning up'
     : 'Transcript saved';
   const parts = [`${detail.chunk_count || 0} parts uploaded`, `${detail.transcribed_chunks ?? detail.chunk_count ?? 0} transcribed`];
   if (detail.transcription_pending_chunks) {
@@ -1242,26 +1259,66 @@ async function finishStoppedLectures() {
   }
   return pending;
 }
+function continueLectureCapture() {
+  state.rotating = false;
+  state.chunkIndex += 1;
+  armRecorder();
+  return `Recording lecture · part ${state.chunkIndex + 1}`;
+}
 async function saveLectureChunk(blob, captureId) {
-  if (state.captureReady) await state.captureReady;
-  const sessionId = state.liveSessionId;
-  if (!sessionId) throw new Error("Lecture session is not ready");
-  const index = state.chunkIndex++;
   const continuing = state.recording;
-  if (continuing) {
-    state.rotating = false;
-    armRecorder();
-    setStatus(`Recording lecture · part ${state.chunkIndex + 1}`);
+  // Arm the next minute before awaiting session setup once that setup has
+  // already settled. A rejected session must not leave the timer running
+  // with the microphone stopped. While setup is still pending, wait so the
+  // server-assigned part number is not guessed.
+  let armedNext = false;
+  if (continuing && state.captureReadyState !== "pending") {
+    setStatus(continueLectureCapture());
+    armedNext = true;
   }
-  const row = { id: captureId, blob, sessionId, index, complete: true, createdAt: Date.now() };
-  if (!continuing) rememberStoppedLecture(sessionId, state.chunkIndex);
+  if (state.captureReady) {
+    try {
+      await state.captureReady;
+    } catch (_) {
+      // Keep the finished part in the local journal below.
+    }
+  }
+  if (continuing && state.recording && !armedNext) {
+    setStatus(continueLectureCapture());
+    armedNext = true;
+  }
+  const sessionId = state.liveSessionId;
+  const index = armedNext ? state.chunkIndex - 1 : state.chunkIndex++;
+  const row = {
+    id: captureId,
+    blob,
+    sessionId: sessionId || "",
+    index,
+    complete: true,
+    createdAt: Date.now(),
+  };
+  if (!sessionId) {
+    await SpeechRecovery.put(row);
+    await refreshRecoveryStatus();
+    if (state.recording) {
+      setStatus(`Recording lecture · part ${state.chunkIndex + 1}. Earlier part stays on this device until you use Recover audio.`);
+      return;
+    }
+    throw new Error("Lecture session is not ready");
+  }
+  if (!state.recording) rememberStoppedLecture(sessionId, state.chunkIndex);
   await SpeechRecovery.put(row);
   const upload = sendCapture(row);
   // Observe rejection immediately, even while the next recorder is running.
   upload.catch(() => {});
   state.uploads.push(upload);
-  if (continuing) {
-    await upload;
+  if (state.recording) {
+    try {
+      await upload;
+    } catch (error) {
+      error.localAudioRetained = true;
+      throw error;
+    }
     await sync();
     return;
   }
@@ -1327,10 +1384,15 @@ async function onRecorderStop() {
     else await saveLectureChunk(blob, recorder.captureId);
     if (state.discard && state.recordingMode === "lecture") await SpeechRecovery.remove(recorder.captureId);
   } catch (error) {
-    const recovery = state.recordingMode === "lecture"
-      ? "Use Recover audio; do not clear browser storage."
-      : "This note take was not saved. Record it again; Recover audio only keeps lecture parts.";
-    setStatus(`${error.message} · ${recovery}`);
+    const stillRecording = state.recording && state.recordingMode === "lecture";
+    const recovery = stillRecording
+      ? (error.localAudioRetained
+        ? `Recording lecture · part ${state.chunkIndex + 1}. Earlier part stays on this device. Use Recover audio after stopping; do not clear browser storage.`
+        : `Recording lecture · part ${state.chunkIndex + 1}. ${error.message}`)
+      : state.recordingMode === "lecture"
+      ? `${error.message} · Use Recover audio; do not clear browser storage.`
+      : `${error.message} · This note take was not saved. Record it again; Recover audio only keeps lecture parts.`;
+    setStatus(recovery);
     await refreshRecoveryStatus();
     return;
   } finally {
