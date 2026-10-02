@@ -102,6 +102,54 @@ function setStatus(text) {
   statusEl.textContent = text || "";
   state.lastStatus = text || "";
 }
+const HISTORY_REFRESH_NOTICE = "History could not refresh. Recording continues.";
+const NOTES_UNSAVED_NOTICE = "Your lecture notes are still unsaved. Recording continues.";
+const NOTE_UNSAVED_NOTICE = "This note is still unsaved. Recording continues.";
+const POLISH_UNSAVED_NOTICE = "This polish edit is still unsaved. Recording continues.";
+const QUESTION_UNSAVED_NOTICE = "Question saved in this browser; server save is still pending.";
+function safeClientDetail(error) {
+  const text = String(error?.message || "Request failed").replace(/\s+/g, " ").trim();
+  if (!text || text.length > 180 || /[\\/]/.test(text)) return "Request failed";
+  return text;
+}
+function liveCaptureStatus() {
+  if (state.recordingMode === "note") {
+    return state.note ? `Recording round ${(state.note.turn_count || 0) + 1}` : "Recording note";
+  }
+  return `Recording lecture · part ${(state.chunkIndex || 0) + 1}`;
+}
+function recordingStatusIsLive(text) {
+  return text.startsWith("Recording lecture")
+    || text.startsWith("Recording note")
+    || text.startsWith("Recording round");
+}
+function holdRecordingStatus() {
+  if (!state.recording) return;
+  if (!recordingStatusIsLive(state.lastStatus || "")) setStatus(liveCaptureStatus());
+}
+function showCaptureNotice(text, priority = 0) {
+  const notice = el("captureNotice");
+  const current = notice.textContent || "";
+  const currentPriority = Number(notice.dataset.priority || 0);
+  if (!current || priority >= currentPriority) {
+    notice.textContent = text;
+    notice.dataset.priority = String(priority);
+  }
+}
+function clearCaptureNotice(text) {
+  const notice = el("captureNotice");
+  if ((notice.textContent || "") !== text) return;
+  notice.textContent = "";
+  delete notice.dataset.priority;
+}
+function clearLiveCaptureNotices() {
+  const notice = el("captureNotice");
+  const current = notice.textContent || "";
+  if (current === HISTORY_REFRESH_NOTICE || current.includes("Recording continues")) {
+    notice.textContent = "";
+    delete notice.dataset.priority;
+  }
+}
 function fit(textarea, maxRatio = 0.32) {
   textarea.style.height = "auto";
   textarea.style.height = Math.min(Math.max(textarea.scrollHeight, 76), innerHeight * maxRatio) + "px";
@@ -273,9 +321,11 @@ async function saveTurn(save, textarea) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
       });
+      clearCaptureNotice(POLISH_UNSAVED_NOTICE);
     } catch (error) {
       save.dirty = true;
-      setStatus(error.message);
+      if (state.recording) showCaptureNotice(POLISH_UNSAVED_NOTICE, 1);
+      else setStatus(error.message);
     } finally {
       save.pending -= 1;
     }
@@ -307,6 +357,7 @@ async function saveFinal(force = false) {
         body: JSON.stringify(payload),
       });
       applyFinalResult(id, result.final_text, result.final_revision);
+      clearCaptureNotice(NOTE_UNSAVED_NOTICE);
     } catch (error) {
       if (error.status === 409 && error.detail?.final_text != null) {
         const merged = rebaseNote(payload.base_text, error.detail.final_text, payload.text);
@@ -325,6 +376,7 @@ async function saveFinal(force = false) {
               }),
             });
             applyFinalResult(id, result.final_text, result.final_revision);
+            clearCaptureNotice(NOTE_UNSAVED_NOTICE);
             return;
           } catch (retryError) {
             error = retryError;
@@ -333,7 +385,8 @@ async function saveFinal(force = false) {
       }
       state.finalDirty = true;
       finalState.textContent = "Unsaved";
-      setStatus(error.message);
+      if (state.recording) showCaptureNotice(NOTE_UNSAVED_NOTICE, 1);
+      else setStatus(error.message);
     } finally {
       state.finalPending -= 1;
     }
@@ -710,11 +763,13 @@ async function flushSessionSave() {
       const key = `speech-draft-${id}`;
       const cached = JSON.parse(localStorage.getItem(key) || "null");
       if (cached?.text === draft && cached?.notes === notes) localStorage.removeItem(key);
+      clearCaptureNotice(NOTES_UNSAVED_NOTICE);
     } catch (error) {
       if (state.selectedId === id) {
         state.lectureDirty ||= saveDraft;
         state.notesDirty ||= saveNotes;
-        setStatus(error.message);
+        if (state.recording) showCaptureNotice(NOTES_UNSAVED_NOTICE, 1);
+        else setStatus(error.message);
       }
       throw error;
     } finally {
@@ -825,8 +880,14 @@ async function sync() {
       }
       renderHistory();
     }
+    clearCaptureNotice(HISTORY_REFRESH_NOTICE);
   } catch (error) {
-    setStatus(error.message);
+    if (state.recording) {
+      holdRecordingStatus();
+      showCaptureNotice(HISTORY_REFRESH_NOTICE, 0);
+    } else {
+      setStatus(error.message);
+    }
   } finally {
     state.syncing = false;
   }
@@ -861,8 +922,13 @@ function armRecorder() {
     const row = { id: recorder.captureId, blob: new Blob(parts, { type: recorder.mimeType }),
       sessionId: state.liveSessionId, index: state.chunkIndex,
       complete: recorder.state === "inactive", createdAt: Date.now() };
-    recorder.backupChain = recorder.backupChain.then(() => SpeechRecovery.put(row))
-      .catch((error) => setStatus(`Audio backup failed: ${error.message}. Keep this tab open.`));
+    recorder.backupChain = recorder.backupChain.then(() => SpeechRecovery.put(row)).then(() => {
+      const notice = el("captureNotice").textContent || "";
+      if (notice.startsWith("Audio backup failed")) clearLiveCaptureNotices();
+    }).catch((error) => {
+      holdRecordingStatus();
+      showCaptureNotice(`Audio backup failed: ${safeClientDetail(error)}. Keep this tab open. Recording continues.`, 2);
+    });
   };
   state.recorder.onstop = onRecorderStop;
   state.recorder.start(5000);
@@ -894,11 +960,17 @@ async function applyCalendarSuggestion(options = {}) {
     const hint = await api("/api/calendar/suggest", { signal: AbortSignal.timeout(9000) });
     if (hint?.course && (force || !courseEl.value.trim())) {
       courseEl.value = hint.course;
-      setStatus(`Course from Calendar · ${hint.course}`);
+      const courseLine = `Course from Calendar · ${hint.course}`;
+      if (state.recording) showCaptureNotice(courseLine, 0);
+      else setStatus(courseLine);
     } else if (hint && hint.authorized === false && hint.detail === "calendar_access_denied") {
-      setStatus("Calendar access denied. Enable Speech Tool under System Settings → Privacy & Security → Calendars.");
+      const denied = "Calendar access denied. Enable Speech Tool under System Settings → Privacy & Security → Calendars.";
+      if (state.recording) showCaptureNotice(denied, 1);
+      else setStatus(denied);
     } else if (hint && hint.detail === "calendar_helper_missing") {
-      setStatus("Calendar helper not installed. Re-run install-desktop.py --install after building calendar-current.");
+      const missing = "Calendar helper not installed. Re-run install-desktop.py --install after building calendar-current.";
+      if (state.recording) showCaptureNotice(missing, 1);
+      else setStatus(missing);
     }
     return hint;
   } catch (_) {
@@ -962,6 +1034,7 @@ async function startRecording(options = {}) {
   state.starting = true;
   const source = el('audioSource').value;
   el('captureNotice').textContent = '';
+  delete el('captureNotice').dataset.priority;
   el('audioSource').disabled = true;
   recordBtn.disabled = true;
   // Start the picker on this click, before awaiting the cross-tab lock.
@@ -1044,8 +1117,20 @@ async function startRecording(options = {}) {
     setStatus(state.recordingMode === "note"
       ? `Recording round ${(state.note?.turn_count || 0) + 1}`
       : `Recording lecture · part ${state.chunkIndex + 1}`);
+    const notice = el("captureNotice").textContent || "";
+    if (notice.startsWith("Lecture setup failed") || notice.startsWith("Note setup failed")) {
+      clearLiveCaptureNotices();
+    }
   } catch (error) {
-    setStatus(error.message);
+    if (state.recording && state.recordingMode === "lecture") {
+      setStatus(`Recording lecture · part ${state.chunkIndex + 1}. The lecture is not ready yet. This part stays on this device.`);
+      showCaptureNotice(`Lecture setup failed: ${safeClientDetail(error)}. Recording continues.`, 2);
+    } else if (state.recording) {
+      setStatus("Recording note. This take is not saved if you stop now.");
+      showCaptureNotice(`Note setup failed: ${safeClientDetail(error)}. Recording continues.`, 2);
+    } else {
+      setStatus(error.message);
+    }
   }
 }
 function finishRecording(discard) {
@@ -1059,6 +1144,7 @@ function finishRecording(discard) {
   state.capture = null;
   el('audioSource').disabled = false;
   el('audioMeters').hidden = true;
+  clearLiveCaptureNotices();
 }
 const stopRecording = () => finishRecording(false);
 const discardRecording = () => finishRecording(true);
@@ -1152,13 +1238,19 @@ function cleanupPausePhrase(seconds) {
   return "a short time";
 }
 function recoveryQueueDetail(rows) {
-  const partial = rows.filter((row) => !row.complete);
+  const partialLoose = rows.filter((row) => !row.complete && !row.sessionId);
+  const partialHeld = rows.filter((row) => !row.complete && row.sessionId);
   const unassigned = rows.filter((row) => row.complete && !row.sessionId);
   const blocked = rows.filter((row) => row.complete && row.sessionId && blockedCaptures.has(row.id));
   const waiting = rows.filter((row) => row.complete && row.sessionId && !blockedCaptures.has(row.id));
   const bits = [`${rows.length} recording part${rows.length === 1 ? "" : "s"} saved in this browser`];
-  if (partial.length) {
-    bits.push(`${partial.length} interrupted part${partial.length === 1 ? "" : "s"} need review. Use Recover audio after stopping`);
+  if (partialHeld.length) {
+    const count = partialHeld.length;
+    bits.push(`${count} interrupted part${count === 1 ? "" : "s"} need review. Recover audio uploads ${count === 1 ? "it" : "them"} after you stop`);
+  }
+  if (partialLoose.length) {
+    const count = partialLoose.length;
+    bits.push(`${count} interrupted part${count === 1 ? "" : "s"} never joined a lecture. Recover audio downloads ${count === 1 ? "it" : "them"} after you stop`);
   }
   if (unassigned.length) {
     bits.push(`${unassigned.length} part${unassigned.length === 1 ? "" : "s"} could not join a lecture. Use Recover audio after stopping to download ${unassigned.length === 1 ? "it" : "them"}`);
@@ -1795,8 +1887,14 @@ questionOut.addEventListener("input", () => {
     try {
       await api(`/api/sessions/${id}/questions/edit`, {method: "POST",
         headers: {"Content-Type": "application/json"}, body: JSON.stringify({text})});
-      if (localStorage.getItem(`speech-question-${id}`) === text) localStorage.removeItem(`speech-question-${id}`);
-    } catch (_) { setStatus("Question saved locally; server save pending."); }
+      if (localStorage.getItem(`speech-question-${id}`) === text) {
+        localStorage.removeItem(`speech-question-${id}`);
+        clearCaptureNotice(QUESTION_UNSAVED_NOTICE);
+      }
+    } catch (_) {
+      if (state.recording) showCaptureNotice(QUESTION_UNSAVED_NOTICE, 1);
+      else setStatus(QUESTION_UNSAVED_NOTICE);
+    }
   }, 400));
 });
 
@@ -1829,7 +1927,7 @@ async function recoverSavedAudio(manual = false) {
   if (state.recording) { setStatus("Stop recording before recovering audio."); return; }
   if (manual && !await claimCapture()) { setStatus(captureBlockedMessage(true)); return; }
   recoveryBusy = true;
-  let recovered = 0, failed = 0;
+  let recovered = 0, failed = 0, downloaded = 0;
   try {
     await refreshRecoveryStatus();
     const rows = await SpeechRecovery.list();
@@ -1840,6 +1938,7 @@ async function recoverSavedAudio(manual = false) {
         const link = document.createElement("a");
         link.href = URL.createObjectURL(row.blob); link.download = `recovered-${row.id}.webm`; link.click();
         setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+        downloaded += 1;
         continue;
       }
       try {
@@ -1847,7 +1946,7 @@ async function recoverSavedAudio(manual = false) {
         recovered++;
       } catch (error) {
         failed++;
-        if (manual) setStatus(`Recovery needs attention: ${error.message}. Local audio retained.`);
+        if (manual) setStatus(`Recovery needs attention: ${safeClientDetail(error)}. Local audio retained.`);
       }
     }
     let endPending = 0;
@@ -1857,9 +1956,17 @@ async function recoverSavedAudio(manual = false) {
         lock ? finishStoppedLectures() : 0
       )) || 0;
     }
+    const downloadedClause = downloaded
+      ? ` Downloaded ${downloaded} part${downloaded === 1 ? "" : "s"} that never joined a lecture; ${downloaded === 1 ? "it stays" : "they stay"} in this browser.`
+      : "";
     if (recovered) {
       setStatus(lectureEndPendingStatus(
-        `${recovered} recording part${recovered === 1 ? '' : 's'} recovered to the original lecture${failed ? ` · ${failed} still need attention` : ''}.`,
+        `${recovered} recording part${recovered === 1 ? '' : 's'} recovered to the original lecture${failed ? ` · ${failed} still need attention` : ''}.${downloadedClause}`,
+        endPending,
+      ));
+    } else if (downloaded) {
+      setStatus(lectureEndPendingStatus(
+        `Downloaded ${downloaded} recording part${downloaded === 1 ? "" : "s"} that never joined a lecture. ${downloaded === 1 ? "It stays" : "They stay"} in this browser; Recover audio can download ${downloaded === 1 ? "it" : "them"} again.${failed ? ` ${failed} still need attention.` : ""}`,
         endPending,
       ));
     } else if (manual && endPending && !failed) {

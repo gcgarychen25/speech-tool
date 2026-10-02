@@ -72,7 +72,15 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "Earlier part stays on this device" in chunk
     assert "localAudioRetained" in chunk
     assert "could not join a lecture" in javascript
+    assert "never joined a lecture" in javascript
+    assert "Recover audio uploads" in javascript
+    assert "Recover audio downloads" in javascript
+    assert "It stays" in javascript
     assert "Recording lecture · part" in javascript
+    assert "History could not refresh. Recording continues." in javascript
+    assert "holdRecordingStatus" in javascript
+    assert "The lecture is not ready yet" in javascript
+    assert "This take is not saved if you stop now" in javascript
     assert "Recording lecture · chunk" not in javascript
     assert "transcript saved · cleaning up" in javascript
     assert "return item.status === 'open' ? 'open' : 'ended'" in javascript
@@ -89,6 +97,8 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "clearContinuousNote" in javascript
     assert "Lecture" in html
     start = javascript.split("async function startRecording", 1)[1]
+    assert "The lecture is not ready yet" in start.split("function finishRecording", 1)[0]
+    assert "holdRecordingStatus()" in javascript.split("async function sync()", 1)[1].split("function hasPending", 1)[0]
     assert start.index("SpeechCapture.open") < start.index("prepareRecordingTarget")
     assert "forceNew" in javascript
     assert "isFreshLecture" in javascript
