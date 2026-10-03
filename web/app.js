@@ -97,16 +97,24 @@ function fmt(value) {
   const remainder = Math.floor(seconds % 60).toString().padStart(2, "0");
   return `${minutes}:${remainder}`;
 }
-function setStatus(text) {
-  if ((text || "") === state.lastStatus) return;
-  statusEl.textContent = text || "";
-  state.lastStatus = text || "";
+function setStatus(text, noticePriority = -1) {
+  const next = text || "";
+  // Side actions stay in the capture notice so the live recording line remains.
+  if (state.recording && !recordingStatusIsLive(next)) {
+    if (next) showCaptureNotice(next, noticePriority);
+    holdRecordingStatus();
+    return;
+  }
+  if (next === state.lastStatus) return;
+  statusEl.textContent = next;
+  state.lastStatus = next;
 }
 const HISTORY_REFRESH_NOTICE = "History could not refresh. Recording continues.";
 const NOTES_UNSAVED_NOTICE = "Your lecture notes are still unsaved. Recording continues.";
 const NOTE_UNSAVED_NOTICE = "This note is still unsaved. Recording continues.";
 const POLISH_UNSAVED_NOTICE = "This polish edit is still unsaved. Recording continues.";
 const QUESTION_UNSAVED_NOTICE = "Question saved in this browser; server save is still pending.";
+const DRAFT_STORAGE_FULL_NOTICE = "Local draft storage is full. Keep this tab open until saved.";
 function safeClientDetail(error) {
   const text = String(error?.message || "Request failed").replace(/\s+/g, " ").trim();
   if (!text || text.length > 180 || /[\\/]/.test(text)) return "Request failed";
@@ -834,7 +842,7 @@ async function renderSession(detail, seed = false) {
       state.lectureDirty = cached.text !== state.lectureApplied;
       state.notesDirty = cached.notes !== state.notesApplied;
       state.sessionRevision = cached.revision;
-      setStatus("Recovered local edits. Copy them before resolving any save conflict.");
+      setStatus("Recovered local edits. Copy them before resolving any save conflict.", 1);
     }
   }
   assignValue(lecturePolished, detail.polished_transcript || "");
@@ -1182,7 +1190,27 @@ async function uploadLectureChunk(blob, sessionId, index, captureId) {
 }
 const uploadingCaptures = new Map();
 const blockedCaptures = new Set();
+const unjournaledCaptures = [];
 let recoveryBusy = false;
+async function listRecoverableCaptures() {
+  const stored = await SpeechRecovery.list().catch(() => []);
+  const memoryIds = new Set(unjournaledCaptures.map((row) => row.id));
+  return stored.filter((row) => !memoryIds.has(row.id)).concat(unjournaledCaptures);
+}
+async function putCaptureRow(row) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await SpeechRecovery.put(row);
+      row.memoryOnly = false;
+      const index = unjournaledCaptures.findIndex((item) => item.id === row.id);
+      if (index >= 0) unjournaledCaptures.splice(index, 1);
+      return true;
+    } catch (_) { /* Retry once, then keep the part in this tab. */ }
+  }
+  row.memoryOnly = true;
+  if (!unjournaledCaptures.some((item) => item.id === row.id)) unjournaledCaptures.push(row);
+  return false;
+}
 async function sendCapture(row) {
   if (uploadingCaptures.has(row.id)) return uploadingCaptures.get(row.id);
   const work = (async () => {
@@ -1193,6 +1221,8 @@ async function sendCapture(row) {
           throw new Error('Server acknowledgement did not match this recording; local audio retained');
         }
         await SpeechRecovery.remove(row.id);
+        const held = unjournaledCaptures.findIndex((item) => item.id === row.id);
+        if (held >= 0) unjournaledCaptures.splice(held, 1);
         blockedCaptures.delete(row.id);
         return saved;
       } catch (error) {
@@ -1212,7 +1242,7 @@ async function sendCapture(row) {
 }
 async function refreshRecoveryStatus() {
   try {
-    const rows = (await SpeechRecovery.list()).filter(row => !(state.recording && row.id === state.recorder?.captureId));
+    const rows = (await listRecoverableCaptures()).filter(row => !(state.recording && row.id === state.recorder?.captureId));
     const panel = el('recoveryPanel');
     panel.hidden = !rows.length && !recoveryBusy;
     el('recoverAudio').hidden = !rows.length;
@@ -1243,7 +1273,16 @@ function recoveryQueueDetail(rows) {
   const unassigned = rows.filter((row) => row.complete && !row.sessionId);
   const blocked = rows.filter((row) => row.complete && row.sessionId && blockedCaptures.has(row.id));
   const waiting = rows.filter((row) => row.complete && row.sessionId && !blockedCaptures.has(row.id));
-  const bits = [`${rows.length} recording part${rows.length === 1 ? "" : "s"} saved in this browser`];
+  const memoryOnly = rows.filter((row) => row.memoryOnly);
+  const durableCount = rows.length - memoryOnly.length;
+  const bits = [];
+  if (durableCount || !memoryOnly.length) {
+    bits.push(`${durableCount} recording part${durableCount === 1 ? "" : "s"} saved in this browser`);
+  }
+  if (memoryOnly.length) {
+    const count = memoryOnly.length;
+    bits.push(`${count} part${count === 1 ? " is" : "s are"} only in this tab. Keep this tab open; closing it drops ${count === 1 ? "that part" : "those parts"}`);
+  }
   if (partialHeld.length) {
     const count = partialHeld.length;
     bits.push(`${count} interrupted part${count === 1 ? "" : "s"} need review. Recover audio uploads ${count === 1 ? "it" : "them"} after you stop`);
@@ -1389,17 +1428,21 @@ async function saveLectureChunk(blob, captureId) {
     complete: true,
     createdAt: Date.now(),
   };
+  const journaled = await putCaptureRow(row);
   if (!sessionId) {
-    await SpeechRecovery.put(row);
     await refreshRecoveryStatus();
     if (state.recording) {
-      setStatus(`Recording lecture · part ${state.chunkIndex + 1}. Earlier part stays on this device until you use Recover audio.`);
+      setStatus(journaled
+        ? `Recording lecture · part ${state.chunkIndex + 1}. Earlier part stays on this device until you use Recover audio.`
+        : `Recording lecture · part ${state.chunkIndex + 1}. Earlier part is only in this tab until you use Recover audio. Keep this tab open.`);
       return;
     }
-    throw new Error("Lecture session is not ready");
+    const failure = new Error("Lecture session is not ready");
+    failure.memoryOnly = !journaled;
+    throw failure;
   }
   if (!state.recording) rememberStoppedLecture(sessionId, state.chunkIndex);
-  await SpeechRecovery.put(row);
+  if (!journaled) await refreshRecoveryStatus();
   const upload = sendCapture(row);
   // Observe rejection immediately, even while the next recorder is running.
   upload.catch(() => {});
@@ -1409,6 +1452,7 @@ async function saveLectureChunk(blob, captureId) {
       await upload;
     } catch (error) {
       error.localAudioRetained = true;
+      error.memoryOnly = unjournaledCaptures.some((item) => item.id === captureId);
       throw error;
     }
     await sync();
@@ -1474,15 +1518,23 @@ async function onRecorderStop() {
     if (state.discard) await handleDiscard();
     else if (state.recordingMode === "note") await saveNoteTurn(blob);
     else await saveLectureChunk(blob, recorder.captureId);
-    if (state.discard && state.recordingMode === "lecture") await SpeechRecovery.remove(recorder.captureId);
+    if (state.discard && state.recordingMode === "lecture") {
+      await SpeechRecovery.remove(recorder.captureId);
+      const held = unjournaledCaptures.findIndex((item) => item.id === recorder.captureId);
+      if (held >= 0) unjournaledCaptures.splice(held, 1);
+    }
   } catch (error) {
     const stillRecording = state.recording && state.recordingMode === "lecture";
     const recovery = stillRecording
       ? (error.localAudioRetained
-        ? `Recording lecture · part ${state.chunkIndex + 1}. Earlier part stays on this device. Use Recover audio after stopping; do not clear browser storage.`
-        : `Recording lecture · part ${state.chunkIndex + 1}. ${error.message}`)
+        ? (error.memoryOnly
+          ? `Recording lecture · part ${state.chunkIndex + 1}. Earlier part is only in this tab. Use Recover audio after stopping, and keep this tab open.`
+          : `Recording lecture · part ${state.chunkIndex + 1}. Earlier part stays on this device. Use Recover audio after stopping; do not clear browser storage.`)
+        : `Recording lecture · part ${state.chunkIndex + 1}. ${safeClientDetail(error)}`)
       : state.recordingMode === "lecture"
-      ? `${error.message} · Use Recover audio; do not clear browser storage.`
+      ? (error.memoryOnly
+        ? `${safeClientDetail(error)} This part is only in this tab. Use Recover audio before closing it.`
+        : `${error.message} · Use Recover audio; do not clear browser storage.`)
       : `${error.message} · This note take was not saved. Record it again; Recover audio only keeps lecture parts.`;
     setStatus(recovery);
     await refreshRecoveryStatus();
@@ -1859,7 +1911,8 @@ function cacheLectureDraft() {
     localStorage.setItem(`speech-draft-${state.selectedId}`, JSON.stringify({
       text: lectureDraft.value, notes: listenerNotes.value, revision: state.sessionRevision,
     }));
-  } catch (_) { setStatus("Local draft storage is full. Keep this tab open until saved."); }
+    clearCaptureNotice(DRAFT_STORAGE_FULL_NOTICE);
+  } catch (_) { setStatus(DRAFT_STORAGE_FULL_NOTICE, 2); }
 }
 window.addEventListener("beforeunload", (event) => {
   if (state.recording || state.sessionSavePending || state.lectureDirty || state.notesDirty) {
@@ -1930,7 +1983,7 @@ async function recoverSavedAudio(manual = false) {
   let recovered = 0, failed = 0, downloaded = 0;
   try {
     await refreshRecoveryStatus();
-    const rows = await SpeechRecovery.list();
+    const rows = await listRecoverableCaptures();
     for (const row of rows) {
       if (!manual && (!row.complete || blockedCaptures.has(row.id))) continue;
       if (!row.sessionId) {
@@ -2003,7 +2056,7 @@ el('copyTranscriptPath').onclick = async () => {
 async function automaticRecovery() {
   await refreshRecoveryStatus();
   if (!state.recording && !recoveryBusy && navigator.onLine) {
-    const rows = await SpeechRecovery.list().catch(() => []);
+    const rows = await listRecoverableCaptures();
     if (rows.some(row => row.complete && row.sessionId && !blockedCaptures.has(row.id)) || Object.keys(localStorage).some(k => k.startsWith('speech-stop-'))) {
       if (navigator.locks) await navigator.locks.request('speech-upload-recovery', {ifAvailable:true}, async lock => {
         if (lock) await recoverSavedAudio(false);

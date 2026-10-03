@@ -79,6 +79,13 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "Recording lecture · part" in javascript
     assert "History could not refresh. Recording continues." in javascript
     assert "holdRecordingStatus" in javascript
+    status_fn = javascript.split("function setStatus", 1)[1].split("function safeClientDetail", 1)[0]
+    assert "recordingStatusIsLive" in status_fn
+    assert "showCaptureNotice" in status_fn
+    assert "Local draft storage is full. Keep this tab open until saved." in javascript
+    assert "only in this tab" in javascript
+    assert "unjournaledCaptures" in javascript
+    assert "putCaptureRow" in javascript
     assert "The lecture is not ready yet" in javascript
     assert "This take is not saved if you stop now" in javascript
     assert "Recording lecture · chunk" not in javascript
