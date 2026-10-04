@@ -87,6 +87,15 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "unjournaledCaptures" in javascript
     assert "putCaptureRow" in javascript
     assert "The lecture is not ready yet" in javascript
+    assert "backupDurable" in javascript
+    assert "only in this tab until the browser backup succeeds" in javascript
+    hold = javascript.split("function lectureSetupHoldStatus", 1)[1].split("function ", 1)[0]
+    assert "This part stays on this device." in hold
+    assert "state.recorder?.backupDurable" in hold
+    backup = javascript.split("recorder.ondataavailable", 1)[1].split("state.recorder.onstop", 1)[0]
+    assert "backupDurable = true" in backup
+    assert "backupDurable = false" in backup
+    assert ", 3);" in backup
     assert "This take is not saved if you stop now" in javascript
     assert "Recording lecture · chunk" not in javascript
     assert "transcript saved · cleaning up" in javascript
@@ -104,7 +113,9 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "clearContinuousNote" in javascript
     assert "Lecture" in html
     start = javascript.split("async function startRecording", 1)[1]
-    assert "The lecture is not ready yet" in start.split("function finishRecording", 1)[0]
+    setup_fail = start.split("function finishRecording", 1)[0]
+    assert "lectureSetupHoldStatus()" in setup_fail
+    assert 'notice.startsWith("Audio backup failed")' in setup_fail
     assert "holdRecordingStatus()" in javascript.split("async function sync()", 1)[1].split("function hasPending", 1)[0]
     assert start.index("SpeechCapture.open") < start.index("prepareRecordingTarget")
     assert "forceNew" in javascript

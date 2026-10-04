@@ -126,6 +126,16 @@ function liveCaptureStatus() {
   }
   return `Recording lecture · part ${(state.chunkIndex || 0) + 1}`;
 }
+function lectureSetupHoldStatus() {
+  const held = state.recorder?.backupDurable
+    ? "This part stays on this device."
+    : "This part is only in this tab until the browser backup succeeds. Keep this tab open.";
+  return `Recording lecture · part ${state.chunkIndex + 1}. The lecture is not ready yet. ${held}`;
+}
+function refreshLectureSetupHold() {
+  if (!state.recording || state.recordingMode !== "lecture" || state.captureReadyState !== "failed") return;
+  setStatus(lectureSetupHoldStatus());
+}
 function recordingStatusIsLive(text) {
   return text.startsWith("Recording lecture")
     || text.startsWith("Recording note")
@@ -931,11 +941,16 @@ function armRecorder() {
       sessionId: state.liveSessionId, index: state.chunkIndex,
       complete: recorder.state === "inactive", createdAt: Date.now() };
     recorder.backupChain = recorder.backupChain.then(() => SpeechRecovery.put(row)).then(() => {
+      recorder.backupDurable = true;
       const notice = el("captureNotice").textContent || "";
       if (notice.startsWith("Audio backup failed")) clearLiveCaptureNotices();
+      if (state.recorder === recorder) refreshLectureSetupHold();
     }).catch((error) => {
+      recorder.backupDurable = false;
       holdRecordingStatus();
-      showCaptureNotice(`Audio backup failed: ${safeClientDetail(error)}. Keep this tab open. Recording continues.`, 2);
+      // Higher than lecture-setup notices so a failed backup is not replaced.
+      showCaptureNotice(`Audio backup failed: ${safeClientDetail(error)}. Keep this tab open. Recording continues.`, 3);
+      if (state.recorder === recorder) refreshLectureSetupHold();
     });
   };
   state.recorder.onstop = onRecorderStop;
@@ -1131,8 +1146,11 @@ async function startRecording(options = {}) {
     }
   } catch (error) {
     if (state.recording && state.recordingMode === "lecture") {
-      setStatus(`Recording lecture · part ${state.chunkIndex + 1}. The lecture is not ready yet. This part stays on this device.`);
-      showCaptureNotice(`Lecture setup failed: ${safeClientDetail(error)}. Recording continues.`, 2);
+      setStatus(lectureSetupHoldStatus());
+      const notice = el("captureNotice").textContent || "";
+      if (!notice.startsWith("Audio backup failed")) {
+        showCaptureNotice(`Lecture setup failed: ${safeClientDetail(error)}. Recording continues.`, 2);
+      }
     } else if (state.recording) {
       setStatus("Recording note. This take is not saved if you stop now.");
       showCaptureNotice(`Note setup failed: ${safeClientDetail(error)}. Recording continues.`, 2);
