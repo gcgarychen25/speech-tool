@@ -88,10 +88,24 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "putCaptureRow" in javascript
     assert "The lecture is not ready yet" in javascript
     assert "backupDurable" in javascript
+    assert "backupEverDurable" in javascript
     assert "only in this tab until the browser backup succeeds" in javascript
+    assert "An earlier backup of this part stays on this device." in javascript
     hold = javascript.split("function lectureSetupHoldStatus", 1)[1].split("function ", 1)[0]
     assert "This part stays on this device." in hold
-    assert "state.recorder?.backupDurable" in hold
+    assert "recorder?.backupDurable" in hold
+    assert "recorder?.backupEverDurable" in hold
+    assert "pageLeaveNeedsWarning" in javascript
+    leave = javascript.split("function pageLeaveNeedsWarning", 1)[1].split("function ", 1)[0]
+    assert "finalDirty" in leave
+    assert "finalPending" in leave
+    assert "unjournaledCaptures" in leave
+    assert "questionUncached" in leave
+    assert "turnSaves" in leave
+    assert "only in this tab until the server confirms" in javascript
+    assert "the copy in this browser stays until the server confirms it" in javascript
+    assert "This question is only in this tab until it saves." in javascript
+    assert "This part is only in this tab." in javascript
     backup = javascript.split("recorder.ondataavailable", 1)[1].split("state.recorder.onstop", 1)[0]
     assert "backupDurable = true" in backup
     assert "backupDurable = false" in backup
