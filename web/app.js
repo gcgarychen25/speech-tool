@@ -90,6 +90,7 @@ const state = {
   autoStopped: false,
   stopEndPending: 0,
   captureReadyState: "pending",
+  noteTakePending: 0,
 };
 
 function fmt(value) {
@@ -106,9 +107,20 @@ function setStatus(text, noticePriority = -1) {
     holdRecordingStatus();
     return;
   }
+  // A note take has no browser journal. Keep the saving line until the server accepts it.
+  if (state.noteTakePending && next !== NOTE_TAKE_SAVING_STATUS) {
+    if (next) showCaptureNotice(next, noticePriority);
+    holdNoteTakeStatus();
+    return;
+  }
   if (next === state.lastStatus) return;
   statusEl.textContent = next;
   state.lastStatus = next;
+}
+function holdNoteTakeStatus() {
+  if (!state.noteTakePending || state.lastStatus === NOTE_TAKE_SAVING_STATUS) return;
+  statusEl.textContent = NOTE_TAKE_SAVING_STATUS;
+  state.lastStatus = NOTE_TAKE_SAVING_STATUS;
 }
 const HISTORY_REFRESH_NOTICE = "History could not refresh. Recording continues.";
 const NOTES_UNSAVED_NOTICE = "Your lecture notes are still unsaved. Recording continues.";
@@ -117,6 +129,8 @@ const POLISH_UNSAVED_NOTICE = "This polish edit is still unsaved. Recording cont
 const QUESTION_UNSAVED_NOTICE = "Question saved in this browser; server save is still pending.";
 const QUESTION_TAB_ONLY_NOTICE = "This question is only in this tab until it saves. Keep this tab open.";
 const DRAFT_STORAGE_FULL_NOTICE = "Local draft storage is full. Keep this tab open until saved.";
+const NOTE_TAKE_SAVING_STATUS = "Saving this note take. Keep this tab open until it is stored.";
+const HISTORY_DURING_NOTE_SAVE = "History could not refresh. This note take is still saving. Keep this tab open.";
 function safeClientDetail(error) {
   const text = String(error?.message || "Request failed").replace(/\s+/g, " ").trim();
   if (!text || text.length > 180 || /[\\/]/.test(text)) return "Request failed";
@@ -904,10 +918,14 @@ async function sync() {
       renderHistory();
     }
     clearCaptureNotice(HISTORY_REFRESH_NOTICE);
+    clearCaptureNotice(HISTORY_DURING_NOTE_SAVE);
   } catch (error) {
     if (state.recording) {
       holdRecordingStatus();
       showCaptureNotice(HISTORY_REFRESH_NOTICE, 0);
+    } else if (state.noteTakePending) {
+      holdNoteTakeStatus();
+      showCaptureNotice(HISTORY_DURING_NOTE_SAVE, 0);
     } else {
       setStatus(error.message);
     }
@@ -1187,11 +1205,12 @@ async function saveNoteTurn(blob) {
   if (state.captureReady) await state.captureReady;
   const form = new FormData();
   form.append("file", blob, "recording.webm");
-  setStatus("Saving audio");
+  setStatus(NOTE_TAKE_SAVING_STATUS);
   const turn = await api(`/api/notes/${state.selectedId}/turns`, {
     method: "POST",
     body: form,
   });
+  state.releaseNoteTakeHold?.();
   const summary = {
     ...turn,
     asr_draft: null,
@@ -1557,6 +1576,16 @@ async function onRecorderStop() {
   const blob = new Blob(state.blobs, {
     type: state.recorder?.mimeType || "audio/webm",
   });
+  // Note audio is not in the browser journal. Warn until this stop attempt finishes.
+  const noteNeedsHold = finalStop && !state.discard && state.recordingMode === "note" && blob.size > 0;
+  if (noteNeedsHold) {
+    state.noteTakePending += 1;
+    state.releaseNoteTakeHold = () => {
+      state.noteTakePending = Math.max(0, state.noteTakePending - 1);
+      state.releaseNoteTakeHold = null;
+    };
+  }
+  let failure = null;
   try {
     await recorder.backupChain;
     if (state.discard) await handleDiscard();
@@ -1568,6 +1597,14 @@ async function onRecorderStop() {
       if (held >= 0) unjournaledCaptures.splice(held, 1);
     }
   } catch (error) {
+    failure = error;
+  } finally {
+    state.releaseNoteTakeHold?.();
+    clearCaptureNotice(HISTORY_DURING_NOTE_SAVE);
+    if (finalStop) state.releaseCaptureLock?.();
+  }
+  if (failure) {
+    const error = failure;
     const stillRecording = state.recording && state.recordingMode === "lecture";
     const recovery = stillRecording
       ? (error.localAudioRetained
@@ -1583,8 +1620,6 @@ async function onRecorderStop() {
     setStatus(recovery);
     await refreshRecoveryStatus();
     return;
-  } finally {
-    if (finalStop) state.releaseCaptureLock?.();
   }
   if (state.autoStopped) {
     setStatus(lectureEndPendingStatus(
@@ -1959,7 +1994,7 @@ function cacheLectureDraft() {
   } catch (_) { setStatus(DRAFT_STORAGE_FULL_NOTICE, 2); }
 }
 function pageLeaveNeedsWarning() {
-  if (state.recording || state.sessionSavePending || state.lectureDirty || state.notesDirty) return true;
+  if (state.recording || state.noteTakePending || state.sessionSavePending || state.lectureDirty || state.notesDirty) return true;
   if (state.finalDirty || state.finalPending || state.questionUncached || unjournaledCaptures.length) return true;
   for (const save of state.turnSaves.values()) {
     if (save.dirty || save.pending) return true;

@@ -82,6 +82,8 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     status_fn = javascript.split("function setStatus", 1)[1].split("function safeClientDetail", 1)[0]
     assert "recordingStatusIsLive" in status_fn
     assert "showCaptureNotice" in status_fn
+    assert "noteTakePending" in status_fn
+    assert "holdNoteTakeStatus" in status_fn
     assert "Local draft storage is full. Keep this tab open until saved." in javascript
     assert "only in this tab" in javascript
     assert "unjournaledCaptures" in javascript
@@ -102,6 +104,7 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "unjournaledCaptures" in leave
     assert "questionUncached" in leave
     assert "turnSaves" in leave
+    assert "noteTakePending" in leave
     assert "only in this tab until the server confirms" in javascript
     assert "the copy in this browser stays until the server confirms it" in javascript
     assert "This question is only in this tab until it saves." in javascript
@@ -111,6 +114,13 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "backupDurable = false" in backup
     assert ", 3);" in backup
     assert "This take is not saved if you stop now" in javascript
+    assert "Saving this note take. Keep this tab open until it is stored." in javascript
+    assert "History could not refresh. This note take is still saving. Keep this tab open." in javascript
+    note_save = javascript.split("async function saveNoteTurn", 1)[1].split("async function ", 1)[0]
+    assert note_save.index("releaseNoteTakeHold") < note_save.index("· transcribing")
+    recorder_stop = javascript.split("async function onRecorderStop", 1)[1].split("async function ", 1)[0]
+    assert recorder_stop.index("noteTakePending") < recorder_stop.index("await recorder.backupChain")
+    assert recorder_stop.index("releaseNoteTakeHold") < recorder_stop.index("This note take was not saved")
     assert "Recording lecture · chunk" not in javascript
     assert "transcript saved · cleaning up" in javascript
     assert "return item.status === 'open' ? 'open' : 'ended'" in javascript
