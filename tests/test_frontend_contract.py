@@ -70,6 +70,8 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     chunk = javascript.split("async function saveLectureChunk", 1)[1].split("async function ", 1)[0]
     assert chunk.index("continueLectureCapture") < chunk.index("await state.captureReady")
     assert "Earlier part stays on this device" in chunk
+    assert "Recover audio downloads it after you stop" in chunk
+    assert "failure.unassigned = true" in chunk
     assert "localAudioRetained" in chunk
     assert "could not join a lecture" in javascript
     assert "never joined a lecture" in javascript
@@ -107,6 +109,12 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "noteTakePending" in leave
     assert "only in this tab until the server confirms" in javascript
     assert "the copy in this browser stays until the server confirms it" in javascript
+    assert "the copies in this browser stay until the server confirms them" in javascript
+    assert "The other copy stays in this browser until the server confirms it." in javascript
+    assert "audio gaps" in javascript
+    assert "1 part has no detected speech" in javascript
+    assert "the downloads are the copies to keep" in javascript
+    assert "Recover audio downloads it before this tab closes." in javascript
     assert "This question is only in this tab until it saves." in javascript
     assert "This part is only in this tab." in javascript
     backup = javascript.split("recorder.ondataavailable", 1)[1].split("state.recorder.onstop", 1)[0]

@@ -252,10 +252,16 @@ function cleanupListStatus(kind) {
 }
 function itemStatus(item) {
   if (item.kind === 'session') {
-    if (item.missing_chunk_indices?.length) return `${item.missing_chunk_indices.length} audio gap · review`;
+    if (item.missing_chunk_indices?.length) {
+      const gaps = item.missing_chunk_indices.length;
+      return gaps === 1 ? "1 audio gap · review" : `${gaps} audio gaps · review`;
+    }
     if (item.asr_failed_chunks) return 'audio saved · transcription needs retry';
     if (item.transcription_pending_chunks) return 'audio saved · transcribing';
-    if (item.empty_transcript_chunks) return 'some parts have no detected speech';
+    if (item.empty_transcript_chunks) {
+      const silent = item.empty_transcript_chunks;
+      return silent === 1 ? "1 part has no detected speech" : `${silent} parts have no detected speech`;
+    }
     if (item.duplicate_chunk_indices?.length) return 'duplicate part numbers · review';
     if (item.cleanup_failed_chunks) return cleanupListStatus(cleanupBreakdown(item));
     if (item.cleanup_pending_chunks) return 'transcript saved · cleaning up';
@@ -1292,16 +1298,22 @@ function uploadingRecoveryDetail() {
   const memory = ids.filter((id) => unjournaledCaptures.some((row) => row.id === id)).length;
   const noun = `recording part${count === 1 ? "" : "s"}`;
   if (!memory) {
-    return `Uploading ${count} ${noun} · the copy in this browser stays until the server confirms it.`;
+    return count === 1
+      ? "Uploading 1 recording part · the copy in this browser stays until the server confirms it."
+      : `Uploading ${count} recording parts · the copies in this browser stay until the server confirms them.`;
   }
   if (memory === count) {
     const be = count === 1 ? "it is" : "they are";
     const pronoun = count === 1 ? "it" : "them";
     return `Uploading ${count} ${noun} · ${be} only in this tab until the server confirms ${pronoun}. Keep this tab open.`;
   }
-  const be = memory === 1 ? "is" : "are";
+  const durable = count - memory;
+  const memBe = memory === 1 ? "is" : "are";
   const pronoun = memory === 1 ? "it" : "them";
-  return `Uploading ${count} ${noun} · ${memory} ${be} only in this tab until the server confirms ${pronoun}. Keep this tab open.`;
+  const durableBit = durable === 1
+    ? "The other copy stays in this browser until the server confirms it."
+    : `The other ${durable} copies stay in this browser until the server confirms them.`;
+  return `Uploading ${count} ${noun} · ${memory} ${memBe} only in this tab until the server confirms ${pronoun}. ${durableBit} Keep this tab open.`;
 }
 async function refreshRecoveryStatus() {
   try {
@@ -1381,7 +1393,8 @@ function renderLectureHealth(detail) {
     : missing.length ? 'Some audio has not reached this lecture'
     : failed ? 'Audio saved · transcription needs retry'
     : detail.transcription_pending_chunks ? 'Audio saved · transcribing'
-    : detail.empty_transcript_chunks ? 'Audio saved · some parts have no detected speech'
+    : detail.empty_transcript_chunks === 1 ? 'Audio saved · 1 part has no detected speech'
+    : detail.empty_transcript_chunks ? `Audio saved · ${detail.empty_transcript_chunks} parts have no detected speech`
     : duplicate.length ? 'Duplicate part numbers need review'
     : providerPause ? 'Transcript saved · AI cleanup unavailable'
     : guardOnly ? 'Transcript saved · original kept'
@@ -1394,7 +1407,11 @@ function renderLectureHealth(detail) {
     parts.push(`${pendingAsr} part${pendingAsr === 1 ? '' : 's'} still transcribing`);
   }
   if (failed) parts.push(`${failed} part${failed === 1 ? '' : 's'} need transcription retry`);
-  if (detail.empty_transcript_chunks) parts.push(`${detail.empty_transcript_chunks} parts finished without transcript text. Check your audio source; a missing speaker signal cannot be restored by text cleanup`);
+  if (detail.empty_transcript_chunks) {
+    const silent = detail.empty_transcript_chunks;
+    const noun = silent === 1 ? "part" : "parts";
+    parts.push(`${silent} ${noun} finished without transcript text. Check your audio source; a missing speaker signal cannot be restored by text cleanup`);
+  }
   if (missing.length) parts.push(`Missing part${missing.length === 1 ? '' : 's'}: ${missing.slice(0, 8).map(i => i + 1).join(', ')}${missing.length > 8 ? '…' : ''}. Check Recover audio in the original browser`);
   if (duplicate.length) parts.push('Duplicate part numbers need review');
   if (providerPause) {
@@ -1496,12 +1513,13 @@ async function saveLectureChunk(blob, captureId) {
     await refreshRecoveryStatus();
     if (state.recording) {
       setStatus(journaled
-        ? `Recording lecture · part ${state.chunkIndex + 1}. Earlier part stays on this device until you use Recover audio.`
-        : `Recording lecture · part ${state.chunkIndex + 1}. Earlier part is only in this tab until you use Recover audio. Keep this tab open.`);
+        ? `Recording lecture · part ${state.chunkIndex + 1}. Earlier part stays on this device. It never joined a lecture. Recover audio downloads it after you stop.`
+        : `Recording lecture · part ${state.chunkIndex + 1}. Earlier part is only in this tab and never joined a lecture. Recover audio downloads it after you stop. Keep this tab open.`);
       return;
     }
     const failure = new Error("Lecture session is not ready");
     failure.memoryOnly = !journaled;
+    failure.unassigned = true;
     throw failure;
   }
   if (!state.recording) rememberStoppedLecture(sessionId, state.chunkIndex);
@@ -1613,9 +1631,13 @@ async function onRecorderStop() {
           : `Recording lecture · part ${state.chunkIndex + 1}. Earlier part stays on this device. Use Recover audio after stopping; do not clear browser storage.`)
         : `Recording lecture · part ${state.chunkIndex + 1}. ${safeClientDetail(error)}`)
       : state.recordingMode === "lecture"
-      ? (error.memoryOnly
+      ? (error.unassigned
+        ? (error.memoryOnly
+          ? "Lecture session is not ready. This part never joined a lecture and is only in this tab. Recover audio downloads it before this tab closes."
+          : "Lecture session is not ready. This part never joined a lecture and stays in this browser. Recover audio downloads it; do not clear browser storage.")
+        : error.memoryOnly
         ? `${safeClientDetail(error)} This part is only in this tab. Use Recover audio before closing it.`
-        : `${error.message} · Use Recover audio; do not clear browser storage.`)
+        : `${safeClientDetail(error)} · Use Recover audio; do not clear browser storage.`)
       : `${error.message} · This note take was not saved. Record it again; Recover audio only keeps lecture parts.`;
     setStatus(recovery);
     await refreshRecoveryStatus();
@@ -2084,7 +2106,8 @@ function downloadedStaySentence(downloaded, downloadedMemory) {
   if (downloadedMemory && !durable) {
     const be = downloaded === 1 ? "It is" : "They are";
     const again = downloaded === 1 ? "it" : "them";
-    return `${be} only in this tab until it closes; the download is the copy to keep, and this tab can download ${again} again.`;
+    const kept = downloaded === 1 ? "the download is the copy to keep" : "the downloads are the copies to keep";
+    return `${be} only in this tab until this tab closes; ${kept}, and this tab can download ${again} again.`;
   }
   if (!downloadedMemory) {
     return downloaded === 1
@@ -2093,8 +2116,8 @@ function downloadedStaySentence(downloaded, downloadedMemory) {
   }
   const durableBit = durable === 1 ? "1 stays in this browser" : `${durable} stay in this browser`;
   const memoryBit = downloadedMemory === 1
-    ? "1 is only in this tab until it closes; the download is the copy to keep"
-    : `${downloadedMemory} are only in this tab until it closes; the download is the copy to keep`;
+    ? "1 is only in this tab until this tab closes; the download is the copy to keep"
+    : `${downloadedMemory} are only in this tab until this tab closes; the downloads are the copies to keep`;
   return `${durableBit}. ${memoryBit}.`;
 }
 function downloadedRecoverySuffix(downloaded, downloadedMemory) {
