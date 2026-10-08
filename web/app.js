@@ -1450,6 +1450,31 @@ function lectureEndPendingStatus(base, pending) {
   const which = pending === 1 ? "A lecture is" : "Lectures are";
   return `${base} ${which} not marked ended yet; that retry continues automatically.`;
 }
+function liveUploadFailureStatus(error) {
+  const prefix = `Recording lecture · part ${state.chunkIndex + 1}.`;
+  if (!error.localAudioRetained) return `${prefix} ${safeClientDetail(error)}`;
+  const blocked = Boolean(error.uploadBlocked);
+  if (error.memoryOnly) {
+    return blocked
+      ? `${prefix} Earlier part is only in this tab and will not retry until you use Recover audio. Keep this tab open.`
+      : `${prefix} Earlier part is only in this tab. It retries automatically after you stop. Keep this tab open.`;
+  }
+  return blocked
+    ? `${prefix} Earlier part stays on this device and will not retry until you use Recover audio.`
+    : `${prefix} Earlier part stays on this device. It retries automatically after you stop.`;
+}
+function rejectedUploadStopStatus(captureId) {
+  const tabOnly = unjournaledCaptures.some((item) => item.id === captureId);
+  const where = tabOnly
+    ? "This part is only in this tab and will not retry until you use Recover audio. Keep this tab open."
+    : "This part stays on this device and will not retry until you use Recover audio.";
+  const pending = state.stopEndPending;
+  const ending = !pending ? ""
+    : pending === 1
+      ? " The lecture is not marked ended yet; that end request retries automatically."
+      : " Lectures are not marked ended yet; those end requests retry automatically.";
+  return `Recording stopped. ${where}${ending}`;
+}
 async function finishStoppedLectures() {
   let pending = 0;
   for (const key of Object.keys(localStorage).filter(key => key.startsWith('speech-stop-'))) {
@@ -1534,6 +1559,7 @@ async function saveLectureChunk(blob, captureId) {
     } catch (error) {
       error.localAudioRetained = true;
       error.memoryOnly = unjournaledCaptures.some((item) => item.id === captureId);
+      error.uploadBlocked = blockedCaptures.has(captureId);
       throw error;
     }
     await sync();
@@ -1546,11 +1572,17 @@ async function saveLectureChunk(blob, captureId) {
   try { unmarked = await finishStoppedLectures(); }
   finally { state.liveSessionId = null; }
   state.stopEndPending = unmarked;
-  upload.then(() => sync()).catch(() => refreshRecoveryStatus());
-  setStatus(lectureEndPendingStatus(
+  const stoppedLine = lectureEndPendingStatus(
     'Recording stopped · audio uploads and transcript processing continue in the background.',
     unmarked,
-  ));
+  );
+  upload.then(() => sync()).catch(() => {
+    refreshRecoveryStatus();
+    // A rejected part does not keep uploading. Leave a newer status alone.
+    if (state.recording || !blockedCaptures.has(captureId) || state.lastStatus !== stoppedLine) return;
+    setStatus(rejectedUploadStopStatus(captureId));
+  });
+  setStatus(stoppedLine);
   await sync();
 }
 async function handleDiscard() {
@@ -1625,11 +1657,7 @@ async function onRecorderStop() {
     const error = failure;
     const stillRecording = state.recording && state.recordingMode === "lecture";
     const recovery = stillRecording
-      ? (error.localAudioRetained
-        ? (error.memoryOnly
-          ? `Recording lecture · part ${state.chunkIndex + 1}. Earlier part is only in this tab. Use Recover audio after stopping, and keep this tab open.`
-          : `Recording lecture · part ${state.chunkIndex + 1}. Earlier part stays on this device. Use Recover audio after stopping; do not clear browser storage.`)
-        : `Recording lecture · part ${state.chunkIndex + 1}. ${safeClientDetail(error)}`)
+      ? liveUploadFailureStatus(error)
       : state.recordingMode === "lecture"
       ? (error.unassigned
         ? (error.memoryOnly
@@ -1638,7 +1666,7 @@ async function onRecorderStop() {
         : error.memoryOnly
         ? `${safeClientDetail(error)} This part is only in this tab. Use Recover audio before closing it.`
         : `${safeClientDetail(error)} · Use Recover audio; do not clear browser storage.`)
-      : `${error.message} · This note take was not saved. Record it again; Recover audio only keeps lecture parts.`;
+      : `${safeClientDetail(error)} · This note take was not saved. Record it again; Recover audio only keeps lecture parts.`;
     setStatus(recovery);
     await refreshRecoveryStatus();
     return;

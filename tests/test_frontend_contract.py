@@ -73,6 +73,11 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "Recover audio downloads it after you stop" in chunk
     assert "failure.unassigned = true" in chunk
     assert "localAudioRetained" in chunk
+    assert "uploadBlocked" in chunk
+    assert "retries automatically after you stop" in javascript
+    assert "will not retry until you use Recover audio" in javascript
+    assert "rejectedUploadStopStatus" in chunk
+    assert "state.lastStatus !== stoppedLine" in chunk
     assert "could not join a lecture" in javascript
     assert "never joined a lecture" in javascript
     assert "Recover audio uploads" in javascript
@@ -129,6 +134,9 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     recorder_stop = javascript.split("async function onRecorderStop", 1)[1].split("async function ", 1)[0]
     assert recorder_stop.index("noteTakePending") < recorder_stop.index("await recorder.backupChain")
     assert recorder_stop.index("releaseNoteTakeHold") < recorder_stop.index("This note take was not saved")
+    assert "safeClientDetail(error)} · This note take was not saved" in recorder_stop
+    assert "error.message} · This note take was not saved" not in recorder_stop
+    assert "liveUploadFailureStatus" in recorder_stop
     assert "Recording lecture · chunk" not in javascript
     assert "transcript saved · cleaning up" in javascript
     assert "return item.status === 'open' ? 'open' : 'ended'" in javascript
