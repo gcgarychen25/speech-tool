@@ -1447,8 +1447,10 @@ function rememberStoppedLecture(sessionId, expected) {
 }
 function lectureEndPendingStatus(base, pending) {
   if (!pending) return base;
-  const which = pending === 1 ? "A lecture is" : "Lectures are";
-  return `${base} ${which} not marked ended yet; that retry continues automatically.`;
+  const clause = pending === 1
+    ? "A lecture is not marked ended yet; that end request retries automatically."
+    : "Lectures are not marked ended yet; those end requests retry automatically.";
+  return `${base} ${clause}`;
 }
 function liveUploadFailureStatus(error) {
   const prefix = `Recording lecture · part ${state.chunkIndex + 1}.`;
@@ -2180,7 +2182,7 @@ async function recoverSavedAudio(manual = false) {
         failed++;
         const retained = row.memoryOnly
           ? "This part is only in this tab."
-          : "Local audio retained.";
+          : "This part stays in this browser.";
         if (manual) setStatus(`Recovery needs attention: ${safeClientDetail(error)}. ${retained}`);
       }
     }
@@ -2206,7 +2208,9 @@ async function recoverSavedAudio(manual = false) {
       setStatus(lectureEndPendingStatus("Saved audio stays on the server.", endPending));
     }
     await sync();
-  } catch (error) { setStatus(`Recovery pending: ${error.message}. Local audio retained.`); }
+  } catch (error) {
+    setStatus(`Recovery needs attention: ${safeClientDetail(error)}. Try Recover audio again before closing this tab.`);
+  }
   finally { recoveryBusy = false; if (manual) state.releaseCaptureLock?.(); await refreshRecoveryStatus(); }
 }
 el('recoverAudio').onclick = () => recoverSavedAudio(true);

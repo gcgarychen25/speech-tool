@@ -59,4 +59,4 @@ def test_frontend_calendar_autofill_contract():
     assert "cleanup needs review" not in javascript
     assert "calendar-current" in start
     assert "course=" in start
-    assert "app.js?v=34" in html
+    assert "app.js?v=35" in html

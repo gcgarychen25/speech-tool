@@ -51,6 +51,10 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "Completed parts retry automatically" in javascript
     assert "will not retry until you use Recover audio" in javascript
     assert "not marked ended yet" in javascript
+    end_status = javascript.split("function lectureEndPendingStatus", 1)[1].split("function ", 1)[0]
+    assert "that end request retries automatically" in end_status
+    assert "those end requests retry automatically" in end_status
+    assert "that retry continues automatically" not in javascript
     assert "still transcribing" in javascript
     assert "need transcription retry" in javascript
     session_status = javascript.split("if (item.kind === 'session')", 1)[1].split("if (item.state === \"empty\")", 1)[0]
@@ -122,6 +126,12 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "Recover audio downloads it before this tab closes." in javascript
     assert "This question is only in this tab until it saves." in javascript
     assert "This part is only in this tab." in javascript
+    assert "This part stays in this browser." in javascript
+    assert "Local audio retained." not in javascript
+    recover = javascript.split("async function recoverSavedAudio", 1)[1].split("el('recoverAudio')", 1)[0]
+    assert "safeClientDetail(error)" in recover
+    assert "error.message" not in recover
+    assert "Try Recover audio again before closing this tab." in recover
     backup = javascript.split("recorder.ondataavailable", 1)[1].split("state.recorder.onstop", 1)[0]
     assert "backupDurable = true" in backup
     assert "backupDurable = false" in backup
