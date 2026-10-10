@@ -116,6 +116,7 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "questionUncached" in leave
     assert "turnSaves" in leave
     assert "noteTakePending" in leave
+    assert "recorderStopsPending" in leave
     assert "only in this tab until the server confirms" in javascript
     assert "the copy in this browser stays until the server confirms it" in javascript
     assert "the copies in this browser stay until the server confirms them" in javascript
@@ -132,6 +133,16 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "safeClientDetail(error)" in recover
     assert "error.message" not in recover
     assert "Try Recover audio again before closing this tab." in recover
+    assert "failedMemory" in recover
+    assert "recoveryAttentionStatus" in recover
+    assert "These parts are only in this tab." in javascript
+    assert "1 is only in this tab" in javascript
+    assert '${tabBit}; ${browserBit}' in javascript
+    assert "saved audio will continue processing" not in javascript
+    assert "Meeting sharing ended. Recording stopped." in javascript
+    assert "this part may still be only in this tab." in javascript
+    assert "stopRecorderSoon" in javascript
+    assert "recorder.pendingStop" in javascript
     backup = javascript.split("recorder.ondataavailable", 1)[1].split("state.recorder.onstop", 1)[0]
     assert "backupDurable = true" in backup
     assert "backupDurable = false" in backup

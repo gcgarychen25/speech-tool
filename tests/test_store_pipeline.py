@@ -477,6 +477,32 @@ def test_question_drafts_stay_off_transcript_and_use_recent_memory(tmp_path):
     assert "broadcasting aligns" not in memory
 
 
+def test_decoder_errors_omit_filesystem_paths(monkeypatch):
+    from pathlib import Path
+
+    from speech_tool import media
+
+    class Failed:
+        returncode = 1
+        stderr = "/tmp/speech-tool-test/incoming/clip.webm: Invalid data found"
+        stdout = ""
+
+    monkeypatch.setattr(media.subprocess, "run", lambda *args, **kwargs: Failed())
+    try:
+        media.ffprobe_duration(Path("clip.webm"))
+        raise AssertionError("expected MediaError")
+    except media.MediaError as exc:
+        text = str(exc)
+    assert "/" not in text
+    assert text == media.UNREADABLE_AUDIO
+    try:
+        media.ensure_wav_16k(Path("clip.webm"), Path("clip.wav"))
+        raise AssertionError("expected MediaError")
+    except media.MediaError as exc:
+        assert str(exc) == media.UNREADABLE_AUDIO
+        assert "clip.webm" not in str(exc)
+
+
 def test_rejects_over_ten_minutes():
     from speech_tool.media import MediaError, validate_duration
 

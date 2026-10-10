@@ -17,6 +17,15 @@ from speech_tool.store import EventStore, NoteRevisionConflict, SessionRevisionC
 from speech_tool.transcript_quality import is_noise_transcript
 
 STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "web"
+AUDIO_STORE_FAILURE = "Audio could not be stored; original upload retained in browser"
+
+
+def public_client_message(exc: BaseException, fallback: str) -> str:
+    """Drop filesystem paths and oversized decoder output before it reaches the page."""
+    text = " ".join(str(exc).split())
+    if not text or len(text) > 180 or "/" in text or "\\" in text:
+        return fallback
+    return text
 
 
 class TextUpdate(BaseModel):
@@ -587,7 +596,7 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
         except FileNotFoundError:
             raise HTTPException(404, "Note not found")
         except Exception as exc:
-            raise HTTPException(400, str(exc)) from exc
+            raise HTTPException(400, public_client_message(exc, AUDIO_STORE_FAILURE)) from exc
         finally:
             incoming.unlink(missing_ok=True)
 
@@ -880,10 +889,10 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             )
         except CaptureConflict as exc:
             incoming.unlink(missing_ok=True)
-            raise HTTPException(409, str(exc)) from exc
+            raise HTTPException(409, public_client_message(exc, "This recording conflicts with one already stored")) from exc
         except Exception as exc:
             incoming.unlink(missing_ok=True)
-            raise HTTPException(400, str(exc)) from exc
+            raise HTTPException(400, public_client_message(exc, AUDIO_STORE_FAILURE)) from exc
         incoming.unlink(missing_ok=True)
         return view(event_id)
 

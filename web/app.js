@@ -91,6 +91,7 @@ const state = {
   stopEndPending: 0,
   captureReadyState: "pending",
   noteTakePending: 0,
+  recorderStopsPending: 0,
 };
 
 function fmt(value) {
@@ -1095,8 +1096,14 @@ async function startRecording(options = {}) {
   recordBtn.disabled = true;
   // Start the picker on this click, before awaiting the cross-tab lock.
   const openCapture = () => SpeechCapture.open(source, () => {
-    if (state.recording) stopRecording();
-    el('captureNotice').textContent = 'Meeting sharing ended. Recording stopped; saved audio will continue processing.';
+    if (!state.recording) return;
+    const backupFailed = (el("captureNotice").textContent || "").startsWith("Audio backup failed");
+    stopRecording();
+    const notice = el("captureNotice");
+    notice.textContent = backupFailed
+      ? "Meeting sharing ended. Recording stopped. Keep this tab open; this part may still be only in this tab."
+      : "Meeting sharing ended. Recording stopped.";
+    notice.dataset.priority = backupFailed ? "3" : "2";
   }, levels => {
     el('micLevel').value = levels.microphone || 0;
     el('meetingLevel').value = levels.meeting || 0;
@@ -1151,7 +1158,7 @@ async function startRecording(options = {}) {
     if (state.recordingMode === "lecture" && !state.rotating &&
         (Date.now() - state.chunkStartedAt) / 1000 >= LECTURE_CHUNK) {
       state.rotating = true;
-      state.recorder.stop();
+      stopRecorderSoon(state.recorder);
     }
   }, 200);
   setStatus(state.recordingMode === "note" ? "Recording note" : "Recording lecture");
@@ -1192,12 +1199,25 @@ async function startRecording(options = {}) {
     }
   }
 }
+function stopRecorderSoon(recorder) {
+  if (!recorder || recorder.state === "inactive") return false;
+  state.recorderStopsPending += 1;
+  recorder.pendingStop = true;
+  try {
+    recorder.stop();
+  } catch (_) {
+    recorder.pendingStop = false;
+    state.recorderStopsPending = Math.max(0, state.recorderStopsPending - 1);
+    return false;
+  }
+  return true;
+}
 function finishRecording(discard) {
   if (!state.recording) return;
   state.discard = discard;
   recordingUI(false);
   clearInterval(state.tick);
-  if (state.recorder?.state !== "inactive") state.recorder.stop();
+  stopRecorderSoon(state.recorder);
   state.media?.getTracks().forEach((track) => track.stop());
   state.capture?.close();
   state.capture = null;
@@ -1654,6 +1674,10 @@ async function onRecorderStop() {
     state.releaseNoteTakeHold?.();
     clearCaptureNotice(HISTORY_DURING_NOTE_SAVE);
     if (finalStop) state.releaseCaptureLock?.();
+    if (recorder?.pendingStop) {
+      recorder.pendingStop = false;
+      state.recorderStopsPending = Math.max(0, state.recorderStopsPending - 1);
+    }
   }
   if (failure) {
     const error = failure;
@@ -2046,7 +2070,7 @@ function cacheLectureDraft() {
   } catch (_) { setStatus(DRAFT_STORAGE_FULL_NOTICE, 2); }
 }
 function pageLeaveNeedsWarning() {
-  if (state.recording || state.noteTakePending || state.sessionSavePending || state.lectureDirty || state.notesDirty) return true;
+  if (state.recording || state.recorderStopsPending || state.noteTakePending || state.sessionSavePending || state.lectureDirty || state.notesDirty) return true;
   if (state.finalDirty || state.finalPending || state.questionUncached || unjournaledCaptures.length) return true;
   for (const save of state.turnSaves.values()) {
     if (save.dirty || save.pending) return true;
@@ -2131,6 +2155,45 @@ function captureBlockedMessage(forRecovery) {
     ? "Stop the recording in the other tab first."
     : "Recording is already active in another Speech Tool tab. Return to that tab.";
 }
+function recoveryStillWaitingClause(failed, failedMemory) {
+  if (!failed) return "";
+  const durable = failed - failedMemory;
+  const count = failed === 1 ? "1 still needs attention." : `${failed} still need attention.`;
+  if (failedMemory && !durable) {
+    const where = failed === 1
+      ? "That part is only in this tab. Try Recover audio again before closing this tab."
+      : "Those parts are only in this tab. Try Recover audio again before closing this tab.";
+    return `${count} ${where}`;
+  }
+  if (!failedMemory) {
+    const where = failed === 1
+      ? "That part stays in this browser. Try Recover audio again."
+      : "Those parts stay in this browser. Try Recover audio again.";
+    return `${count} ${where}`;
+  }
+  const tabBit = failedMemory === 1 ? "1 is only in this tab" : `${failedMemory} are only in this tab`;
+  const browserBit = durable === 1 ? "1 stays in this browser" : `${durable} stay in this browser`;
+  return `${count} ${tabBit}; ${browserBit}. Try Recover audio again before closing this tab.`;
+}
+function recoveryAttentionStatus(failed, failedMemory, detail) {
+  const prefix = `Recovery needs attention: ${detail}.`;
+  if (failed === 1) {
+    return failedMemory
+      ? `${prefix} This part is only in this tab. Try Recover audio again before closing this tab.`
+      : `${prefix} This part stays in this browser. Try Recover audio again.`;
+  }
+  const durable = failed - failedMemory;
+  const count = `${failed} parts still need attention.`;
+  if (failedMemory && !durable) {
+    return `${prefix} ${count} These parts are only in this tab. Try Recover audio again before closing this tab.`;
+  }
+  if (!failedMemory) {
+    return `${prefix} ${count} These parts stay in this browser. Try Recover audio again.`;
+  }
+  const tabBit = failedMemory === 1 ? "1 is only in this tab" : `${failedMemory} are only in this tab`;
+  const browserBit = durable === 1 ? "1 stays in this browser" : `${durable} stay in this browser`;
+  return `${prefix} ${count} ${tabBit}; ${browserBit}. Try Recover audio again before closing this tab.`;
+}
 function downloadedStaySentence(downloaded, downloadedMemory) {
   const durable = downloaded - downloadedMemory;
   if (downloadedMemory && !durable) {
@@ -2160,7 +2223,8 @@ async function recoverSavedAudio(manual = false) {
   if (state.recording) { setStatus("Stop recording before recovering audio."); return; }
   if (manual && !await claimCapture()) { setStatus(captureBlockedMessage(true)); return; }
   recoveryBusy = true;
-  let recovered = 0, failed = 0, downloaded = 0, downloadedMemory = 0;
+  let recovered = 0, failed = 0, failedMemory = 0, downloaded = 0, downloadedMemory = 0;
+  let lastFailureDetail = "";
   try {
     await refreshRecoveryStatus();
     const rows = await listRecoverableCaptures();
@@ -2180,10 +2244,8 @@ async function recoverSavedAudio(manual = false) {
         recovered++;
       } catch (error) {
         failed++;
-        const retained = row.memoryOnly
-          ? "This part is only in this tab."
-          : "This part stays in this browser.";
-        if (manual) setStatus(`Recovery needs attention: ${safeClientDetail(error)}. ${retained}`);
+        if (row.memoryOnly) failedMemory += 1;
+        lastFailureDetail = safeClientDetail(error);
       }
     }
     let endPending = 0;
@@ -2194,17 +2256,21 @@ async function recoverSavedAudio(manual = false) {
       )) || 0;
     }
     const downloadedClause = downloadedRecoverySuffix(downloaded, downloadedMemory);
+    const waiting = recoveryStillWaitingClause(failed, failedMemory);
     if (recovered) {
+      const head = `${recovered} recording part${recovered === 1 ? '' : 's'} recovered to the original lecture.`;
       setStatus(lectureEndPendingStatus(
-        `${recovered} recording part${recovered === 1 ? '' : 's'} recovered to the original lecture${failed ? ` · ${failed} still need attention` : ''}.${downloadedClause}`,
+        `${waiting ? `${head} ${waiting}` : head}${downloadedClause}`,
         endPending,
       ));
     } else if (downloaded) {
       setStatus(lectureEndPendingStatus(
-        `${downloadedRecoverySuffix(downloaded, downloadedMemory).trim()}${failed ? ` ${failed} still need attention.` : ""}`,
+        `${downloadedRecoverySuffix(downloaded, downloadedMemory).trim()}${waiting ? ` ${waiting}` : ""}`,
         endPending,
       ));
-    } else if (manual && endPending && !failed) {
+    } else if (manual && failed) {
+      setStatus(lectureEndPendingStatus(recoveryAttentionStatus(failed, failedMemory, lastFailureDetail), endPending));
+    } else if (manual && endPending) {
       setStatus(lectureEndPendingStatus("Saved audio stays on the server.", endPending));
     }
     await sync();

@@ -72,6 +72,36 @@ def test_gap_trailing_gap_next_index_and_saved_raw(tmp_path):
     assert client.get(f'/api/sessions/{session.id}').json()['missing_chunk_indices'] == []
 
 
+def test_upload_error_hides_filesystem_path(tmp_path, monkeypatch):
+    from speech_tool.media import MediaError
+
+    store, _pipe, client = setup(tmp_path)
+    session = store.create_session()
+
+    def unreadable(_path):
+        raise MediaError("unreadable /tmp/speech-tool-test/clip.webm")
+
+    monkeypatch.setattr("speech_tool.pipeline.ffprobe_duration", unreadable)
+    hidden = client.post(
+        f"/api/events?session_id={session.id}&chunk_index=0&capture_id=capture-path",
+        files={"file": ("a.webm", b"audio", "audio/webm")},
+    )
+    assert hidden.status_code == 400
+    assert "/" not in hidden.json()["detail"]
+    assert hidden.json()["detail"] == "Audio could not be stored; original upload retained in browser"
+
+    def readable_failure(_path):
+        raise MediaError("No decodable audio packets; original upload retained in browser")
+
+    monkeypatch.setattr("speech_tool.pipeline.ffprobe_duration", readable_failure)
+    shown = client.post(
+        f"/api/events?session_id={session.id}&chunk_index=1&capture_id=capture-clean",
+        files={"file": ("b.webm", b"audio", "audio/webm")},
+    )
+    assert shown.status_code == 400
+    assert shown.json()["detail"] == "No decodable audio packets; original upload retained in browser"
+
+
 def test_capture_ack_retries_and_index_conflicts(tmp_path, monkeypatch):
     store, pipe, client = setup(tmp_path)
     session = store.create_session()

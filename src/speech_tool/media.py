@@ -10,6 +10,11 @@ class MediaError(RuntimeError):
     pass
 
 
+# Decoder stderr includes the local file path. Callers keep the upload and
+# show this sentence instead.
+UNREADABLE_AUDIO = "Audio could not be read; original upload retained in browser"
+
+
 def ffprobe_duration(path: Path) -> float:
     result = subprocess.run(
         [
@@ -27,7 +32,7 @@ def ffprobe_duration(path: Path) -> float:
         check=False,
     )
     if result.returncode != 0:
-        raise MediaError(result.stderr.strip() or "ffprobe failed")
+        raise MediaError(UNREADABLE_AUDIO)
     value = result.stdout.strip()
     if not value or value == "N/A":
         # MediaRecorder WebM (including recovered partial chunks) often lacks
@@ -68,7 +73,7 @@ def ensure_wav_16k(src: Path, dest: Path) -> Path:
         check=False,
     )
     if result.returncode != 0:
-        raise MediaError(result.stderr.strip() or "ffmpeg failed")
+        raise MediaError(UNREADABLE_AUDIO)
     return dest
 
 
