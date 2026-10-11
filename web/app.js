@@ -1465,6 +1465,32 @@ function renderLectureHealth(detail) {
 function rememberStoppedLecture(sessionId, expected) {
   localStorage.setItem(`speech-stop-${sessionId}`, JSON.stringify({expected_chunk_count: expected}));
 }
+function captureFailureReason(error) {
+  const text = safeClientDetail(error).replace(/[.]+$/, "");
+  if (!text || text === "Request failed") return "";
+  if (/could not be read|decodable audio/i.test(text)) return "The audio could not be read";
+  if (/acknowledgement did not match/i.test(text)) return "The server did not confirm this recording";
+  // Server text can claim the upload was retained in the browser. Location is decided below.
+  if (/retained in browser|local audio retained|could not be stored/i.test(text)) return "";
+  return text;
+}
+function stoppedLecturePartStatus(error) {
+  if (error.unassigned) {
+    return error.memoryOnly
+      ? "Lecture session is not ready. This part never joined a lecture and is only in this tab. Recover audio downloads it before this tab closes."
+      : "Lecture session is not ready. This part never joined a lecture and stays in this browser. Recover audio downloads it; do not clear browser storage.";
+  }
+  const where = error.memoryOnly
+    ? "This part is only in this tab. Use Recover audio before closing it."
+    : "This part stays in this browser. Use Recover audio; do not clear browser storage.";
+  const reason = captureFailureReason(error);
+  return reason ? `${reason}. ${where}` : where;
+}
+function stoppedNoteTakeStatus(error) {
+  const reason = captureFailureReason(error);
+  const tail = "This note take was not saved. Record it again; Recover audio only keeps lecture parts.";
+  return reason ? `${reason}. ${tail}` : tail;
+}
 function lectureEndPendingStatus(base, pending) {
   if (!pending) return base;
   const clause = pending === 1
@@ -1685,14 +1711,8 @@ async function onRecorderStop() {
     const recovery = stillRecording
       ? liveUploadFailureStatus(error)
       : state.recordingMode === "lecture"
-      ? (error.unassigned
-        ? (error.memoryOnly
-          ? "Lecture session is not ready. This part never joined a lecture and is only in this tab. Recover audio downloads it before this tab closes."
-          : "Lecture session is not ready. This part never joined a lecture and stays in this browser. Recover audio downloads it; do not clear browser storage.")
-        : error.memoryOnly
-        ? `${safeClientDetail(error)} This part is only in this tab. Use Recover audio before closing it.`
-        : `${safeClientDetail(error)} · Use Recover audio; do not clear browser storage.`)
-      : `${safeClientDetail(error)} · This note take was not saved. Record it again; Recover audio only keeps lecture parts.`;
+      ? stoppedLecturePartStatus(error)
+      : stoppedNoteTakeStatus(error);
     setStatus(recovery);
     await refreshRecoveryStatus();
     return;

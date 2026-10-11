@@ -154,9 +154,23 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert note_save.index("releaseNoteTakeHold") < note_save.index("· transcribing")
     recorder_stop = javascript.split("async function onRecorderStop", 1)[1].split("async function ", 1)[0]
     assert recorder_stop.index("noteTakePending") < recorder_stop.index("await recorder.backupChain")
-    assert recorder_stop.index("releaseNoteTakeHold") < recorder_stop.index("This note take was not saved")
-    assert "safeClientDetail(error)} · This note take was not saved" in recorder_stop
+    assert recorder_stop.index("releaseNoteTakeHold") < recorder_stop.index("stoppedNoteTakeStatus")
+    assert "stoppedLecturePartStatus(error)" in recorder_stop
+    assert "stoppedNoteTakeStatus(error)" in recorder_stop
     assert "error.message} · This note take was not saved" not in recorder_stop
+    reason = javascript.split("function captureFailureReason", 1)[1].split("function ", 1)[0]
+    assert "safeClientDetail(error)" in reason
+    assert "The audio could not be read" in reason
+    assert "The server did not confirm this recording" in reason
+    assert "retained in browser" in reason
+    stopped_part = javascript.split("function stoppedLecturePartStatus", 1)[1].split("function ", 1)[0]
+    assert "This part is only in this tab. Use Recover audio before closing it." in stopped_part
+    assert "This part stays in this browser. Use Recover audio; do not clear browser storage." in stopped_part
+    assert "safeClientDetail(error)" not in stopped_part
+    stopped_note = javascript.split("function stoppedNoteTakeStatus", 1)[1].split("function ", 1)[0]
+    assert "This note take was not saved. Record it again; Recover audio only keeps lecture parts." in stopped_note
+    assert "retained in browser" not in stopped_note
+    assert "safeClientDetail(error)} This part is only in this tab" not in javascript
     assert "liveUploadFailureStatus" in recorder_stop
     assert "Recording lecture · chunk" not in javascript
     assert "transcript saved · cleaning up" in javascript
