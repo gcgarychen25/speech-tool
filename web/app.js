@@ -1470,8 +1470,10 @@ function captureFailureReason(error) {
   if (!text || text === "Request failed") return "";
   if (/could not be read|decodable audio/i.test(text)) return "The audio could not be read";
   if (/acknowledgement did not match/i.test(text)) return "The server did not confirm this recording";
+  if (/could not be stored/i.test(text)) return "The audio could not be stored";
+  if (/already stored|conflicts with one already stored/i.test(text)) return "This recording conflicts with one already stored";
   // Server text can claim the upload was retained in the browser. Location is decided below.
-  if (/retained in browser|local audio retained|could not be stored/i.test(text)) return "";
+  if (/retained in browser|local audio retained/i.test(text)) return "";
   return text;
 }
 function stoppedLecturePartStatus(error) {
@@ -1500,16 +1502,21 @@ function lectureEndPendingStatus(base, pending) {
 }
 function liveUploadFailureStatus(error) {
   const prefix = `Recording lecture · part ${state.chunkIndex + 1}.`;
-  if (!error.localAudioRetained) return `${prefix} ${safeClientDetail(error)}`;
-  const blocked = Boolean(error.uploadBlocked);
-  if (error.memoryOnly) {
-    return blocked
-      ? `${prefix} Earlier part is only in this tab and will not retry until you use Recover audio. Keep this tab open.`
-      : `${prefix} Earlier part is only in this tab. It retries automatically after you stop. Keep this tab open.`;
+  const reason = captureFailureReason(error);
+  const reasonBit = reason ? `${reason}.` : "";
+  if (!error.localAudioRetained) {
+    // Location is unknown. Do not repeat a server claim that the browser stored this part.
+    return reasonBit ? `${prefix} ${reasonBit} Recording continues.` : `${prefix} Recording continues.`;
   }
-  return blocked
-    ? `${prefix} Earlier part stays on this device and will not retry until you use Recover audio.`
-    : `${prefix} Earlier part stays on this device. It retries automatically after you stop.`;
+  const blocked = Boolean(error.uploadBlocked);
+  const where = error.memoryOnly
+    ? (blocked
+      ? "Earlier part is only in this tab and will not retry until you use Recover audio. Keep this tab open."
+      : "Earlier part is only in this tab. It retries automatically after you stop. Keep this tab open.")
+    : (blocked
+      ? "Earlier part stays on this device and will not retry until you use Recover audio."
+      : "Earlier part stays on this device. It retries automatically after you stop.");
+  return reasonBit ? `${prefix} ${reasonBit} ${where}` : `${prefix} ${where}`;
 }
 function rejectedUploadStopStatus(captureId) {
   const tabOnly = unjournaledCaptures.some((item) => item.id === captureId);
@@ -2196,7 +2203,8 @@ function recoveryStillWaitingClause(failed, failedMemory) {
   return `${count} ${tabBit}; ${browserBit}. Try Recover audio again before closing this tab.`;
 }
 function recoveryAttentionStatus(failed, failedMemory, detail) {
-  const prefix = `Recovery needs attention: ${detail}.`;
+  const reason = String(detail || "").replace(/[.]+$/, "");
+  const prefix = reason ? `Recovery needs attention: ${reason}.` : "Recovery needs attention.";
   if (failed === 1) {
     return failedMemory
       ? `${prefix} This part is only in this tab. Try Recover audio again before closing this tab.`
@@ -2265,7 +2273,7 @@ async function recoverSavedAudio(manual = false) {
       } catch (error) {
         failed++;
         if (row.memoryOnly) failedMemory += 1;
-        lastFailureDetail = safeClientDetail(error);
+        lastFailureDetail = captureFailureReason(error);
       }
     }
     let endPending = 0;
@@ -2295,7 +2303,10 @@ async function recoverSavedAudio(manual = false) {
     }
     await sync();
   } catch (error) {
-    setStatus(`Recovery needs attention: ${safeClientDetail(error)}. Try Recover audio again before closing this tab.`);
+    const reason = captureFailureReason(error);
+    setStatus(reason
+      ? `Recovery needs attention: ${reason}. Try Recover audio again before closing this tab.`
+      : "Recovery needs attention. Try Recover audio again before closing this tab.");
   }
   finally { recoveryBusy = false; if (manual) state.releaseCaptureLock?.(); await refreshRecoveryStatus(); }
 }

@@ -130,8 +130,12 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "This part stays in this browser." in javascript
     assert "Local audio retained." not in javascript
     recover = javascript.split("async function recoverSavedAudio", 1)[1].split("el('recoverAudio')", 1)[0]
-    assert "safeClientDetail(error)" in recover
+    assert "captureFailureReason(error)" in recover
+    assert "safeClientDetail(error)" not in recover
     assert "error.message" not in recover
+    attention = javascript.split("function recoveryAttentionStatus", 1)[1].split("function ", 1)[0]
+    assert "Recovery needs attention." in attention
+    assert "Recovery needs attention: ${reason}." in attention
     assert "Try Recover audio again before closing this tab." in recover
     assert "failedMemory" in recover
     assert "recoveryAttentionStatus" in recover
@@ -162,7 +166,10 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "safeClientDetail(error)" in reason
     assert "The audio could not be read" in reason
     assert "The server did not confirm this recording" in reason
+    assert "The audio could not be stored" in reason
+    assert "This recording conflicts with one already stored" in reason
     assert "retained in browser" in reason
+    assert "could not be stored" not in reason.split("The audio could not be stored", 1)[-1]
     stopped_part = javascript.split("function stoppedLecturePartStatus", 1)[1].split("function ", 1)[0]
     assert "This part is only in this tab. Use Recover audio before closing it." in stopped_part
     assert "This part stays in this browser. Use Recover audio; do not clear browser storage." in stopped_part
@@ -172,6 +179,12 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "retained in browser" not in stopped_note
     assert "safeClientDetail(error)} This part is only in this tab" not in javascript
     assert "liveUploadFailureStatus" in recorder_stop
+    live_fail = javascript.split("function liveUploadFailureStatus", 1)[1].split("function ", 1)[0]
+    assert "captureFailureReason(error)" in live_fail
+    assert "safeClientDetail(error)" not in live_fail
+    assert "Recording continues." in live_fail
+    assert "Earlier part is only in this tab and will not retry until you use Recover audio." in live_fail
+    assert "Earlier part stays on this device. It retries automatically after you stop." in live_fail
     assert "Recording lecture · chunk" not in javascript
     assert "transcript saved · cleaning up" in javascript
     assert "return item.status === 'open' ? 'open' : 'ended'" in javascript
