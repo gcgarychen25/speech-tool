@@ -89,6 +89,12 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "It stays" in javascript
     assert "Recording lecture · part" in javascript
     assert "History could not refresh. Recording continues." in javascript
+    assert 'const HISTORY_REFRESH_IDLE = "History could not refresh."' in javascript
+    assert 'const NOTES_UNSAVED_IDLE = "Your lecture notes are still unsaved."' in javascript
+    assert 'const NOTE_UNSAVED_IDLE = "This note is still unsaved."' in javascript
+    assert 'const POLISH_UNSAVED_IDLE = "This polish edit is still unsaved."' in javascript
+    assert "idleUnsavedStatus" in javascript
+    assert "safeStatusDetail" in javascript
     assert "holdRecordingStatus" in javascript
     status_fn = javascript.split("function setStatus", 1)[1].split("function safeClientDetail", 1)[0]
     assert "recordingStatusIsLive" in status_fn
@@ -204,7 +210,30 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     setup_fail = start.split("function finishRecording", 1)[0]
     assert "lectureSetupHoldStatus()" in setup_fail
     assert 'notice.startsWith("Audio backup failed")' in setup_fail
-    assert "holdRecordingStatus()" in javascript.split("async function sync()", 1)[1].split("function hasPending", 1)[0]
+    sync_fn = javascript.split("async function sync()", 1)[1].split("function hasPending", 1)[0]
+    assert "holdRecordingStatus()" in sync_fn
+    assert "error.message" not in sync_fn
+    assert "HISTORY_REFRESH_IDLE" in sync_fn
+    assert "state.lastStatus !== HISTORY_REFRESH_IDLE" in sync_fn
+    assert "state.lastStatus === HISTORY_REFRESH_IDLE" in sync_fn
+    stopped_notices = javascript.split("function clearLiveCaptureNotices", 1)[1].split("function fit", 1)[0]
+    assert "HISTORY_REFRESH_IDLE" in stopped_notices
+    assert "NOTES_UNSAVED_IDLE" in stopped_notices
+    assert "NOTE_UNSAVED_IDLE" in stopped_notices
+    assert "POLISH_UNSAVED_IDLE" in stopped_notices
+    assert 'current.includes("Recording continues")' in stopped_notices
+    save_turn = javascript.split("async function saveTurn", 1)[1].split("async function ", 1)[0]
+    assert "POLISH_UNSAVED_IDLE" in save_turn
+    assert "error.message" not in save_turn
+    save_final = javascript.split("async function saveFinal", 1)[1].split("async function flushFinalSave", 1)[0]
+    assert "NOTE_UNSAVED_IDLE" in save_final
+    assert "error.message" not in save_final
+    save_session = javascript.split("async function flushSessionSave", 1)[1].split("async function mergeSessionChunks", 1)[0]
+    assert "NOTES_UNSAVED_IDLE" in save_session
+    assert "error.message" not in save_session
+    switch_mode = javascript.split("async function switchMode", 1)[1].split("function resetQuestionFields", 1)[0]
+    assert "NOTES_UNSAVED_IDLE" in switch_mode
+    assert "error.message" not in switch_mode
     assert start.index("SpeechCapture.open") < start.index("prepareRecordingTarget")
     assert "forceNew" in javascript
     assert "isFreshLecture" in javascript

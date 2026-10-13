@@ -124,9 +124,13 @@ function holdNoteTakeStatus() {
   state.lastStatus = NOTE_TAKE_SAVING_STATUS;
 }
 const HISTORY_REFRESH_NOTICE = "History could not refresh. Recording continues.";
+const HISTORY_REFRESH_IDLE = "History could not refresh.";
 const NOTES_UNSAVED_NOTICE = "Your lecture notes are still unsaved. Recording continues.";
+const NOTES_UNSAVED_IDLE = "Your lecture notes are still unsaved.";
 const NOTE_UNSAVED_NOTICE = "This note is still unsaved. Recording continues.";
+const NOTE_UNSAVED_IDLE = "This note is still unsaved.";
 const POLISH_UNSAVED_NOTICE = "This polish edit is still unsaved. Recording continues.";
+const POLISH_UNSAVED_IDLE = "This polish edit is still unsaved.";
 const QUESTION_UNSAVED_NOTICE = "Question saved in this browser; server save is still pending.";
 const QUESTION_TAB_ONLY_NOTICE = "This question is only in this tab until it saves. Keep this tab open.";
 const DRAFT_STORAGE_FULL_NOTICE = "Local draft storage is full. Keep this tab open until saved.";
@@ -136,6 +140,15 @@ function safeClientDetail(error) {
   const text = String(error?.message || "Request failed").replace(/\s+/g, " ").trim();
   if (!text || text.length > 180 || /[\\/]/.test(text)) return "Request failed";
   return text;
+}
+function safeStatusDetail(error) {
+  const detail = safeClientDetail(error);
+  if (!detail || detail === "Request failed" || /^failed to fetch$/i.test(detail)) return "";
+  return detail;
+}
+function idleUnsavedStatus(base, error) {
+  const detail = safeStatusDetail(error);
+  return detail ? `${base} ${detail}` : base;
 }
 function liveCaptureStatus() {
   if (state.recordingMode === "note") {
@@ -180,10 +193,41 @@ function clearCaptureNotice(text) {
   notice.textContent = "";
   delete notice.dataset.priority;
 }
+function clearIdleUnsavedStatus(base) {
+  if (state.recording || state.noteTakePending) return;
+  const current = state.lastStatus || "";
+  if (current === base || current.startsWith(`${base} `)) setStatus("");
+}
+function clearSavedEditNotice(recordingNotice, idleNotice) {
+  clearCaptureNotice(recordingNotice);
+  clearCaptureNotice(idleNotice);
+  clearIdleUnsavedStatus(idleNotice);
+}
 function clearLiveCaptureNotices() {
   const notice = el("captureNotice");
   const current = notice.textContent || "";
-  if (current === HISTORY_REFRESH_NOTICE || current.includes("Recording continues")) {
+  // Stopping drops "recording continues" without hiding a fact that is still true.
+  if (current === HISTORY_REFRESH_NOTICE) {
+    notice.textContent = HISTORY_REFRESH_IDLE;
+    notice.dataset.priority = "0";
+    return;
+  }
+  if (current === NOTES_UNSAVED_NOTICE) {
+    notice.textContent = NOTES_UNSAVED_IDLE;
+    notice.dataset.priority = "1";
+    return;
+  }
+  if (current === NOTE_UNSAVED_NOTICE) {
+    notice.textContent = NOTE_UNSAVED_IDLE;
+    notice.dataset.priority = "1";
+    return;
+  }
+  if (current === POLISH_UNSAVED_NOTICE) {
+    notice.textContent = POLISH_UNSAVED_IDLE;
+    notice.dataset.priority = "1";
+    return;
+  }
+  if (current.includes("Recording continues")) {
     notice.textContent = "";
     delete notice.dataset.priority;
   }
@@ -365,11 +409,11 @@ async function saveTurn(save, textarea) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
       });
-      clearCaptureNotice(POLISH_UNSAVED_NOTICE);
+      clearSavedEditNotice(POLISH_UNSAVED_NOTICE, POLISH_UNSAVED_IDLE);
     } catch (error) {
       save.dirty = true;
       if (state.recording) showCaptureNotice(POLISH_UNSAVED_NOTICE, 1);
-      else setStatus(error.message);
+      else setStatus(idleUnsavedStatus(POLISH_UNSAVED_IDLE, error));
     } finally {
       save.pending -= 1;
     }
@@ -401,7 +445,7 @@ async function saveFinal(force = false) {
         body: JSON.stringify(payload),
       });
       applyFinalResult(id, result.final_text, result.final_revision);
-      clearCaptureNotice(NOTE_UNSAVED_NOTICE);
+      clearSavedEditNotice(NOTE_UNSAVED_NOTICE, NOTE_UNSAVED_IDLE);
     } catch (error) {
       if (error.status === 409 && error.detail?.final_text != null) {
         const merged = rebaseNote(payload.base_text, error.detail.final_text, payload.text);
@@ -420,7 +464,7 @@ async function saveFinal(force = false) {
               }),
             });
             applyFinalResult(id, result.final_text, result.final_revision);
-            clearCaptureNotice(NOTE_UNSAVED_NOTICE);
+            clearSavedEditNotice(NOTE_UNSAVED_NOTICE, NOTE_UNSAVED_IDLE);
             return;
           } catch (retryError) {
             error = retryError;
@@ -430,7 +474,7 @@ async function saveFinal(force = false) {
       state.finalDirty = true;
       finalState.textContent = "Unsaved";
       if (state.recording) showCaptureNotice(NOTE_UNSAVED_NOTICE, 1);
-      else setStatus(error.message);
+      else setStatus(idleUnsavedStatus(NOTE_UNSAVED_IDLE, error));
     } finally {
       state.finalPending -= 1;
     }
@@ -701,7 +745,7 @@ async function switchMode(mode) {
     await flushTurnSaves();
     await flushSessionSave();
   } catch (error) {
-    setStatus(error.message);
+    setStatus(idleUnsavedStatus(NOTES_UNSAVED_IDLE, error));
   }
   const kind = mode === "note" ? "note" : "session";
   state.mode = mode;
@@ -807,13 +851,13 @@ async function flushSessionSave() {
       const key = `speech-draft-${id}`;
       const cached = JSON.parse(localStorage.getItem(key) || "null");
       if (cached?.text === draft && cached?.notes === notes) localStorage.removeItem(key);
-      clearCaptureNotice(NOTES_UNSAVED_NOTICE);
+      clearSavedEditNotice(NOTES_UNSAVED_NOTICE, NOTES_UNSAVED_IDLE);
     } catch (error) {
       if (state.selectedId === id) {
         state.lectureDirty ||= saveDraft;
         state.notesDirty ||= saveNotes;
         if (state.recording) showCaptureNotice(NOTES_UNSAVED_NOTICE, 1);
-        else setStatus(error.message);
+        else setStatus(idleUnsavedStatus(NOTES_UNSAVED_IDLE, error));
       }
       throw error;
     } finally {
@@ -926,15 +970,19 @@ async function sync() {
     }
     clearCaptureNotice(HISTORY_REFRESH_NOTICE);
     clearCaptureNotice(HISTORY_DURING_NOTE_SAVE);
-  } catch (error) {
+    clearCaptureNotice(HISTORY_REFRESH_IDLE);
+    if (!state.recording && !state.noteTakePending && state.lastStatus === HISTORY_REFRESH_IDLE) setStatus("");
+  } catch {
     if (state.recording) {
       holdRecordingStatus();
       showCaptureNotice(HISTORY_REFRESH_NOTICE, 0);
     } else if (state.noteTakePending) {
       holdNoteTakeStatus();
       showCaptureNotice(HISTORY_DURING_NOTE_SAVE, 0);
+    } else if (state.lastStatus && state.lastStatus !== HISTORY_REFRESH_IDLE) {
+      showCaptureNotice(HISTORY_REFRESH_IDLE, 0);
     } else {
-      setStatus(error.message);
+      setStatus(HISTORY_REFRESH_IDLE);
     }
   } finally {
     state.syncing = false;
