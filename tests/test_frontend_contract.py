@@ -156,7 +156,12 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     backup = javascript.split("recorder.ondataavailable", 1)[1].split("state.recorder.onstop", 1)[0]
     assert "backupDurable = true" in backup
     assert "backupDurable = false" in backup
+    assert "clearAudioBackupNotice()" in backup
+    assert "audioBackupFailureNotice(error, recorder.backupEverDurable)" in backup
     assert ", 3);" in backup
+    backup_notice = javascript.split("function audioBackupFailureNotice", 1)[1].split("function ", 1)[0]
+    assert 'state.recording ? " Recording continues." : ""' in backup_notice
+    assert "Keep this tab open." in backup_notice
     assert "This take is not saved if you stop now" in javascript
     assert "Saving this note take. Keep this tab open until it is stored." in javascript
     assert "History could not refresh. This note take is still saving. Keep this tab open." in javascript
@@ -221,6 +226,8 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "NOTES_UNSAVED_IDLE" in stopped_notices
     assert "NOTE_UNSAVED_IDLE" in stopped_notices
     assert "POLISH_UNSAVED_IDLE" in stopped_notices
+    assert 'current.startsWith("Audio backup failed")' in stopped_notices
+    assert "Recording continues\\.$" in stopped_notices
     assert 'current.includes("Recording continues")' in stopped_notices
     save_turn = javascript.split("async function saveTurn", 1)[1].split("async function ", 1)[0]
     assert "POLISH_UNSAVED_IDLE" in save_turn

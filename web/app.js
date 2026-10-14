@@ -227,10 +227,32 @@ function clearLiveCaptureNotices() {
     notice.dataset.priority = "1";
     return;
   }
+  // A failed backup is still true after Stop. Drop only the live-recording claim.
+  if (current.startsWith("Audio backup failed")) {
+    const stopped = current.replace(/ Recording continues\.$/, "");
+    if (stopped !== current) {
+      notice.textContent = stopped;
+      notice.dataset.priority = "3";
+    }
+    return;
+  }
   if (current.includes("Recording continues")) {
     notice.textContent = "";
     delete notice.dataset.priority;
   }
+}
+function clearAudioBackupNotice() {
+  const notice = el("captureNotice");
+  if (!(notice.textContent || "").startsWith("Audio backup failed")) return;
+  notice.textContent = "";
+  delete notice.dataset.priority;
+}
+function audioBackupFailureNotice(error, earlierDurable) {
+  const earlier = earlierDurable
+    ? " An earlier backup of this part stays on this device."
+    : "";
+  const continues = state.recording ? " Recording continues." : "";
+  return `Audio backup failed: ${safeClientDetail(error)}. Keep this tab open.${earlier}${continues}`;
 }
 function fit(textarea, maxRatio = 0.32) {
   textarea.style.height = "auto";
@@ -1021,17 +1043,14 @@ function armRecorder() {
     recorder.backupChain = recorder.backupChain.then(() => SpeechRecovery.put(row)).then(() => {
       recorder.backupDurable = true;
       recorder.backupEverDurable = true;
-      const notice = el("captureNotice").textContent || "";
-      if (notice.startsWith("Audio backup failed")) clearLiveCaptureNotices();
+      clearAudioBackupNotice();
       if (state.recorder === recorder) refreshLectureSetupHold();
     }).catch((error) => {
       recorder.backupDurable = false;
       holdRecordingStatus();
-      const earlier = recorder.backupEverDurable
-        ? " An earlier backup of this part stays on this device."
-        : "";
       // Higher than lecture-setup notices so a failed backup is not replaced.
-      showCaptureNotice(`Audio backup failed: ${safeClientDetail(error)}. Keep this tab open.${earlier} Recording continues.`, 3);
+      // After Stop, do not claim that recording is still going.
+      showCaptureNotice(audioBackupFailureNotice(error, recorder.backupEverDurable), 3);
       if (state.recorder === recorder) refreshLectureSetupHold();
     });
   };
