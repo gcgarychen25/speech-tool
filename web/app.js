@@ -236,6 +236,20 @@ function clearLiveCaptureNotices() {
     }
     return;
   }
+  // Setup failure is still true after Stop. Discard drops it; Stop keeps the fact.
+  if (current.startsWith("Lecture setup failed") || current.startsWith("Note setup failed")) {
+    if (state.discard) {
+      notice.textContent = "";
+      delete notice.dataset.priority;
+      return;
+    }
+    const stopped = current.replace(/ Recording continues\.$/, "");
+    if (stopped !== current) {
+      notice.textContent = stopped;
+      notice.dataset.priority = "2";
+    }
+    return;
+  }
   if (current.includes("Recording continues")) {
     notice.textContent = "";
     delete notice.dataset.priority;
@@ -253,6 +267,15 @@ function audioBackupFailureNotice(error, earlierDurable) {
     : "";
   const continues = state.recording ? " Recording continues." : "";
   return `Audio backup failed: ${safeClientDetail(error)}. Keep this tab open.${earlier}${continues}`;
+}
+function setupFailureNotice(label, error) {
+  const continues = state.recording ? " Recording continues." : "";
+  return `${label} setup failed: ${safeClientDetail(error)}.${continues}`;
+}
+function showSetupFailureNotice(label, error) {
+  const notice = el("captureNotice").textContent || "";
+  if (notice.startsWith("Audio backup failed")) return;
+  showCaptureNotice(setupFailureNotice(label, error), 2);
 }
 function fit(textarea, maxRatio = 0.32) {
   textarea.style.height = "auto";
@@ -1247,22 +1270,24 @@ async function startRecording(options = {}) {
     setStatus(state.recordingMode === "note"
       ? `Recording round ${(state.note?.turn_count || 0) + 1}`
       : `Recording lecture · part ${state.chunkIndex + 1}`);
-    const notice = el("captureNotice").textContent || "";
-    if (notice.startsWith("Lecture setup failed") || notice.startsWith("Note setup failed")) {
-      clearLiveCaptureNotices();
+    const noticeEl = el("captureNotice");
+    const readyNotice = noticeEl.textContent || "";
+    if (readyNotice.startsWith("Lecture setup failed") || readyNotice.startsWith("Note setup failed")) {
+      noticeEl.textContent = "";
+      delete noticeEl.dataset.priority;
     }
   } catch (error) {
     if (state.recording && state.recordingMode === "lecture") {
       setStatus(lectureSetupHoldStatus());
-      const notice = el("captureNotice").textContent || "";
-      if (!notice.startsWith("Audio backup failed")) {
-        showCaptureNotice(`Lecture setup failed: ${safeClientDetail(error)}. Recording continues.`, 2);
-      }
+      showSetupFailureNotice("Lecture", error);
     } else if (state.recording) {
       setStatus("Recording note. This take is not saved if you stop now.");
-      showCaptureNotice(`Note setup failed: ${safeClientDetail(error)}. Recording continues.`, 2);
-    } else {
-      setStatus(error.message);
+      showSetupFailureNotice("Note", error);
+    } else if (!state.discard && state.recordingMode === "lecture") {
+      // Stop already owns the status line. Keep the setup fact without saying recording continues.
+      showSetupFailureNotice("Lecture", error);
+    } else if (!state.discard && state.recordingMode === "note") {
+      showSetupFailureNotice("Note", error);
     }
   }
 }

@@ -214,7 +214,14 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     start = javascript.split("async function startRecording", 1)[1]
     setup_fail = start.split("function finishRecording", 1)[0]
     assert "lectureSetupHoldStatus()" in setup_fail
-    assert 'notice.startsWith("Audio backup failed")' in setup_fail
+    setup_show = javascript.split("function showSetupFailureNotice", 1)[1].split("function ", 1)[0]
+    assert 'notice.startsWith("Audio backup failed")' in setup_show
+    late_setup = setup_fail.split("await state.captureReady;", 1)[1]
+    assert "setStatus(error.message)" not in late_setup
+    assert 'showSetupFailureNotice("Lecture", error)' in late_setup
+    assert 'showSetupFailureNotice("Note", error)' in late_setup
+    assert "!state.discard" in late_setup
+    assert "clearLiveCaptureNotices()" not in late_setup
     sync_fn = javascript.split("async function sync()", 1)[1].split("function hasPending", 1)[0]
     assert "holdRecordingStatus()" in sync_fn
     assert "error.message" not in sync_fn
@@ -227,8 +234,14 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "NOTE_UNSAVED_IDLE" in stopped_notices
     assert "POLISH_UNSAVED_IDLE" in stopped_notices
     assert 'current.startsWith("Audio backup failed")' in stopped_notices
+    assert 'current.startsWith("Lecture setup failed")' in stopped_notices
+    assert 'current.startsWith("Note setup failed")' in stopped_notices
+    assert "state.discard" in stopped_notices
     assert "Recording continues\\.$" in stopped_notices
     assert 'current.includes("Recording continues")' in stopped_notices
+    setup_notice = javascript.split("function setupFailureNotice", 1)[1].split("function ", 1)[0]
+    assert 'state.recording ? " Recording continues." : ""' in setup_notice
+    assert "safeClientDetail(error)" in setup_notice
     save_turn = javascript.split("async function saveTurn", 1)[1].split("async function ", 1)[0]
     assert "POLISH_UNSAVED_IDLE" in save_turn
     assert "error.message" not in save_turn
