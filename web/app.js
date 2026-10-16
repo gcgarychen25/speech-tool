@@ -1767,6 +1767,36 @@ async function handleDiscard() {
   }
   setStatus(statusText);
 }
+async function forgetDiscardedLecturePart(captureId) {
+  if (!captureId) return true;
+  let removed = false;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await SpeechRecovery.remove(captureId);
+      removed = true;
+      break;
+    } catch (_) { /* Retry once so a discarded part is not uploaded later. */ }
+  }
+  if (!removed) return false;
+  const held = unjournaledCaptures.findIndex((item) => item.id === captureId);
+  if (held >= 0) unjournaledCaptures.splice(held, 1);
+  blockedCaptures.delete(captureId);
+  return true;
+}
+function discardFailureStatus(error, droppedLecturePart) {
+  const detail = safeStatusDetail(error);
+  const tail = detail ? ` ${detail}` : "";
+  if (state.recordingMode === "lecture") {
+    if (!droppedLecturePart) {
+      return "Discard did not finish. This part is still in this browser and can still upload. Keep this tab open.";
+    }
+    if (state.chunkIndex) {
+      return `In-progress part discarded. Earlier parts of this lecture stay saved. The lecture could not be updated.${tail}`;
+    }
+    return `In-progress part discarded. The empty lecture could not be deleted.${tail}`;
+  }
+  return `This take was discarded. The new note could not be deleted.${tail}`;
+}
 async function onRecorderStop() {
   const recorder = state.recorder;
   const finalStop = !state.recording;
@@ -1783,15 +1813,20 @@ async function onRecorderStop() {
     };
   }
   let failure = null;
+  let droppedLecturePart = true;
   try {
     await recorder.backupChain;
+    // Drop the browser copy before the server delete. A failed delete must not
+    // leave this part for Recover audio to upload.
+    if (state.discard && state.recordingMode === "lecture") {
+      droppedLecturePart = await forgetDiscardedLecturePart(recorder.captureId);
+      if (droppedLecturePart) clearAudioBackupNotice();
+    }
     if (state.discard) await handleDiscard();
     else if (state.recordingMode === "note") await saveNoteTurn(blob);
     else await saveLectureChunk(blob, recorder.captureId);
-    if (state.discard && state.recordingMode === "lecture") {
-      await SpeechRecovery.remove(recorder.captureId);
-      const held = unjournaledCaptures.findIndex((item) => item.id === recorder.captureId);
-      if (held >= 0) unjournaledCaptures.splice(held, 1);
+    if (state.discard && state.recordingMode === "lecture" && !droppedLecturePart) {
+      throw new Error("Discard did not finish");
     }
   } catch (error) {
     failure = error;
@@ -1806,6 +1841,11 @@ async function onRecorderStop() {
   }
   if (failure) {
     const error = failure;
+    if (state.discard) {
+      setStatus(discardFailureStatus(error, droppedLecturePart));
+      await refreshRecoveryStatus();
+      return;
+    }
     const stillRecording = state.recording && state.recordingMode === "lecture";
     const recovery = stillRecording
       ? liveUploadFailureStatus(error)

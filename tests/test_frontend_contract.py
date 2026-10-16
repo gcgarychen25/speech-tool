@@ -34,6 +34,9 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "transcript saved · original kept" in javascript
     assert "language or length check" in javascript
     assert "In-progress part discarded. Earlier parts of this lecture stay saved." in javascript
+    assert "The empty lecture could not be deleted." in javascript
+    assert "This part is still in this browser and can still upload." in javascript
+    assert "The new note could not be deleted." in javascript
     assert "Earlier rounds stay in the note." in javascript
     assert "Original transcript kept. Cleanup did not replace it." in javascript
     assert "cleanup_failed_turns" in javascript
@@ -169,7 +172,20 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert note_save.index("releaseNoteTakeHold") < note_save.index("· transcribing")
     recorder_stop = javascript.split("async function onRecorderStop", 1)[1].split("async function ", 1)[0]
     assert recorder_stop.index("noteTakePending") < recorder_stop.index("await recorder.backupChain")
+    assert recorder_stop.index("await recorder.backupChain") < recorder_stop.index("forgetDiscardedLecturePart")
+    assert recorder_stop.index("forgetDiscardedLecturePart") < recorder_stop.index("handleDiscard")
     assert recorder_stop.index("releaseNoteTakeHold") < recorder_stop.index("stoppedNoteTakeStatus")
+    discard_failure = recorder_stop.split("if (failure)", 1)[1]
+    assert discard_failure.index("state.discard") < discard_failure.index("stoppedLecturePartStatus")
+    assert "discardFailureStatus" in discard_failure
+    forget = javascript.split("async function forgetDiscardedLecturePart", 1)[1].split("async function ", 1)[0]
+    assert "SpeechRecovery.remove" in forget
+    assert "unjournaledCaptures" in forget
+    discard_status = javascript.split("function discardFailureStatus", 1)[1].split("async function ", 1)[0]
+    assert "safeStatusDetail" in discard_status
+    assert "Recover audio" not in discard_status
+    assert "The empty lecture could not be deleted." in discard_status
+    assert "can still upload" in discard_status
     assert "stoppedLecturePartStatus(error)" in recorder_stop
     assert "stoppedNoteTakeStatus(error)" in recorder_stop
     assert "error.message} · This note take was not saved" not in recorder_stop
