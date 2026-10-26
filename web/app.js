@@ -1783,11 +1783,12 @@ async function forgetDiscardedLecturePart(captureId) {
   blockedCaptures.delete(captureId);
   return true;
 }
-function discardFailureStatus(error, droppedLecturePart) {
+function discardFailureStatus(error, droppedLecturePart, backupEverDurable = false) {
   const detail = safeStatusDetail(error);
   const tail = detail ? ` ${detail}` : "";
   if (state.recordingMode === "lecture") {
-    if (!droppedLecturePart) {
+    // Only a saved browser backup can upload after discard. A tab-only take cannot.
+    if (!droppedLecturePart && backupEverDurable) {
       return "Discard did not finish. This part is still in this browser and can still upload. Keep this tab open.";
     }
     if (state.chunkIndex) {
@@ -1814,18 +1815,21 @@ async function onRecorderStop() {
   }
   let failure = null;
   let droppedLecturePart = true;
+  let backupEverDurable = false;
   try {
     await recorder.backupChain;
+    backupEverDurable = Boolean(recorder?.backupEverDurable);
     // Drop the browser copy before the server delete. A failed delete must not
-    // leave this part for Recover audio to upload.
+    // leave a saved backup for Recover audio to upload. A part that never
+    // reached the browser journal cannot upload after this take is dropped.
     if (state.discard && state.recordingMode === "lecture") {
       droppedLecturePart = await forgetDiscardedLecturePart(recorder.captureId);
-      if (droppedLecturePart) clearAudioBackupNotice();
+      if (droppedLecturePart || !backupEverDurable) clearAudioBackupNotice();
     }
     if (state.discard) await handleDiscard();
     else if (state.recordingMode === "note") await saveNoteTurn(blob);
     else await saveLectureChunk(blob, recorder.captureId);
-    if (state.discard && state.recordingMode === "lecture" && !droppedLecturePart) {
+    if (state.discard && state.recordingMode === "lecture" && !droppedLecturePart && backupEverDurable) {
       throw new Error("Discard did not finish");
     }
   } catch (error) {
@@ -1842,7 +1846,7 @@ async function onRecorderStop() {
   if (failure) {
     const error = failure;
     if (state.discard) {
-      setStatus(discardFailureStatus(error, droppedLecturePart));
+      setStatus(discardFailureStatus(error, droppedLecturePart, backupEverDurable));
       await refreshRecoveryStatus();
       return;
     }

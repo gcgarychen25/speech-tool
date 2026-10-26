@@ -172,8 +172,11 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert note_save.index("releaseNoteTakeHold") < note_save.index("· transcribing")
     recorder_stop = javascript.split("async function onRecorderStop", 1)[1].split("async function ", 1)[0]
     assert recorder_stop.index("noteTakePending") < recorder_stop.index("await recorder.backupChain")
-    assert recorder_stop.index("await recorder.backupChain") < recorder_stop.index("forgetDiscardedLecturePart")
+    assert recorder_stop.index("await recorder.backupChain") < recorder_stop.index("backupEverDurable = Boolean")
+    assert recorder_stop.index("backupEverDurable = Boolean") < recorder_stop.index("forgetDiscardedLecturePart")
     assert recorder_stop.index("forgetDiscardedLecturePart") < recorder_stop.index("handleDiscard")
+    assert "droppedLecturePart || !backupEverDurable" in recorder_stop
+    assert "!droppedLecturePart && backupEverDurable" in recorder_stop
     assert recorder_stop.index("releaseNoteTakeHold") < recorder_stop.index("stoppedNoteTakeStatus")
     discard_failure = recorder_stop.split("if (failure)", 1)[1]
     assert discard_failure.index("state.discard") < discard_failure.index("stoppedLecturePartStatus")
@@ -185,6 +188,8 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "safeStatusDetail" in discard_status
     assert "Recover audio" not in discard_status
     assert "The empty lecture could not be deleted." in discard_status
+    assert "!droppedLecturePart && backupEverDurable" in discard_status
+    assert discard_status.index("backupEverDurable") < discard_status.index("can still upload")
     assert "can still upload" in discard_status
     assert "stoppedLecturePartStatus(error)" in recorder_stop
     assert "stoppedNoteTakeStatus(error)" in recorder_stop
