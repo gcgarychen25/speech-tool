@@ -154,6 +154,16 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "saved audio will continue processing" not in javascript
     assert "Meeting sharing ended. Recording stopped." in javascript
     assert "this part may still be only in this tab." in javascript
+    share = javascript.split("function meetingShareEndedNotice", 1)[1].split("function ", 1)[0]
+    assert 'current.startsWith("Audio backup failed")' in share
+    assert "state.recorder?.backupEverDurable" in share
+    assert share.index("MEETING_SHARE_STOPPED") < share.index("MEETING_SHARE_EARLIER_BACKUP")
+    assert share.index("MEETING_SHARE_EARLIER_BACKUP") < share.index("MEETING_SHARE_TAB_ONLY")
+    relax = javascript.split("function relaxMeetingShareNotice", 1)[1].split("function ", 1)[0]
+    assert "dataset.meetingCapture !== captureId" in relax
+    assert "MEETING_SHARE_TAB_ONLY" in relax
+    assert "MEETING_SHARE_EARLIER_BACKUP" in relax
+    assert "MEETING_SHARE_STOPPED" in relax
     assert "stopRecorderSoon" in javascript
     assert "recorder.pendingStop" in javascript
     backup = javascript.split("recorder.ondataavailable", 1)[1].split("state.recorder.onstop", 1)[0]
@@ -225,6 +235,7 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "pending += 1" in endLoop
     stop = javascript.split("async function saveLectureChunk", 1)[1].split("async function ", 1)[0]
     assert "state.stopEndPending" in stop
+    assert stop.index("relaxMeetingShareNotice(captureId)") < stop.index("return sync()")
     assert "lectureEndPendingStatus" in stop
     assert "cannot coordinate the microphone" in javascript
     assert "Audio did not start" in (ROOT / "web" / "capture.js").read_text(encoding="utf-8")
@@ -235,6 +246,12 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     start = javascript.split("async function startRecording", 1)[1]
     setup_fail = start.split("function finishRecording", 1)[0]
     assert "lectureSetupHoldStatus()" in setup_fail
+    open_ended = setup_fail.split("SpeechCapture.open", 1)[1].split("levels =>", 1)[0]
+    assert "delete el('captureNotice').dataset.meetingCapture" in setup_fail
+    assert open_ended.index("meetingShareEndedNotice()") < open_ended.index("state.recorder?.captureId")
+    assert open_ended.index("state.recorder?.captureId") < open_ended.index("stopRecording()")
+    assert "notice.dataset.meetingCapture = shareCaptureId" in open_ended
+    assert "MEETING_SHARE_STOPPED" in open_ended
     setup_show = javascript.split("function showSetupFailureNotice", 1)[1].split("function ", 1)[0]
     assert 'notice.startsWith("Audio backup failed")' in setup_show
     late_setup = setup_fail.split("await state.captureReady;", 1)[1]

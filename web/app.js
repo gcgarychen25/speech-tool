@@ -268,6 +268,25 @@ function audioBackupFailureNotice(error, earlierDurable) {
   const continues = state.recording ? " Recording continues." : "";
   return `Audio backup failed: ${safeClientDetail(error)}. Keep this tab open.${earlier}${continues}`;
 }
+const MEETING_SHARE_STOPPED = "Meeting sharing ended. Recording stopped.";
+const MEETING_SHARE_TAB_ONLY = "Meeting sharing ended. Recording stopped. Keep this tab open; this part may still be only in this tab.";
+const MEETING_SHARE_EARLIER_BACKUP = "Meeting sharing ended. Recording stopped. An earlier backup of this part stays on this device. The latest backup did not save. Keep this tab open.";
+function meetingShareEndedNotice() {
+  const current = el("captureNotice").textContent || "";
+  if (!current.startsWith("Audio backup failed")) return MEETING_SHARE_STOPPED;
+  // A failed latest backup can still leave an earlier browser copy of this part.
+  if (state.recorder?.backupEverDurable) return MEETING_SHARE_EARLIER_BACKUP;
+  return MEETING_SHARE_TAB_ONLY;
+}
+function relaxMeetingShareNotice(captureId) {
+  const notice = el("captureNotice");
+  if (notice.dataset.meetingCapture !== captureId) return;
+  const current = notice.textContent || "";
+  if (current !== MEETING_SHARE_TAB_ONLY && current !== MEETING_SHARE_EARLIER_BACKUP) return;
+  notice.textContent = MEETING_SHARE_STOPPED;
+  notice.dataset.priority = "2";
+  delete notice.dataset.meetingCapture;
+}
 function setupFailureNotice(label, error) {
   const continues = state.recording ? " Recording continues." : "";
   return `${label} setup failed: ${safeClientDetail(error)}.${continues}`;
@@ -1182,18 +1201,20 @@ async function startRecording(options = {}) {
   const source = el('audioSource').value;
   el('captureNotice').textContent = '';
   delete el('captureNotice').dataset.priority;
+  delete el('captureNotice').dataset.meetingCapture;
   el('audioSource').disabled = true;
   recordBtn.disabled = true;
   // Start the picker on this click, before awaiting the cross-tab lock.
   const openCapture = () => SpeechCapture.open(source, () => {
     if (!state.recording) return;
-    const backupFailed = (el("captureNotice").textContent || "").startsWith("Audio backup failed");
+    const endedNotice = meetingShareEndedNotice();
+    const shareCaptureId = state.recorder?.captureId || "";
     stopRecording();
     const notice = el("captureNotice");
-    notice.textContent = backupFailed
-      ? "Meeting sharing ended. Recording stopped. Keep this tab open; this part may still be only in this tab."
-      : "Meeting sharing ended. Recording stopped.";
-    notice.dataset.priority = backupFailed ? "3" : "2";
+    notice.textContent = endedNotice;
+    notice.dataset.priority = endedNotice === MEETING_SHARE_STOPPED ? "2" : "3";
+    if (endedNotice === MEETING_SHARE_STOPPED) delete notice.dataset.meetingCapture;
+    else notice.dataset.meetingCapture = shareCaptureId;
   }, levels => {
     el('micLevel').value = levels.microphone || 0;
     el('meetingLevel').value = levels.meeting || 0;
@@ -1723,7 +1744,11 @@ async function saveLectureChunk(blob, captureId) {
     'Recording stopped · audio uploads and transcript processing continue in the background.',
     unmarked,
   );
-  upload.then(() => sync()).catch(() => {
+  upload.then(() => {
+    // The server has this part, so the keep-open share warning is no longer true.
+    relaxMeetingShareNotice(captureId);
+    return sync();
+  }).catch(() => {
     refreshRecoveryStatus();
     // A rejected part does not keep uploading. Leave a newer status alone.
     if (state.recording || !blockedCaptures.has(captureId) || state.lastStatus !== stoppedLine) return;
