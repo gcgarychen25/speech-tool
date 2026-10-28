@@ -51,7 +51,22 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "quality_rejected" in pause
     assert "provider_unavailable" in pause
     assert "quality_rejected" in javascript
-    assert "Completed parts retry automatically" in javascript
+    queue = javascript.split("function recoveryQueueDetail", 1)[1].split("function ", 1)[0]
+    assert "1 interrupted part needs review" in queue
+    assert "interrupted parts need review" in queue
+    assert 'state.recording ? " after you stop" : ""' in queue
+    assert "1 completed part retries automatically" in queue
+    assert "completed parts retry automatically" in queue
+    assert "Use Recover audio${when} to download" in queue
+    assert "1 part needs transcription retry" in javascript
+    assert "parts need transcription retry" in javascript
+    assert "1 cleanup result needs retry" in javascript
+    assert "cleanup results need retry" in javascript
+    assert "Cleanup retry did not start. The original transcript remains." in javascript
+    assert "Transcription retry did not start. Saved audio remains." in javascript
+    assert "Transcript path was not copied." in javascript
+    assert "Polished draft was not copied." in javascript
+    assert "setStatus(error.message)" not in javascript.split("copyInspectorPolished.addEventListener", 1)[1].split("retryInspectorPolish", 1)[0]
     assert "will not retry until you use Recover audio" in javascript
     assert "not marked ended yet" in javascript
     end_status = javascript.split("function lectureEndPendingStatus", 1)[1].split("function ", 1)[0]

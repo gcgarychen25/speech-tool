@@ -1493,22 +1493,37 @@ function recoveryQueueDetail(rows) {
   }
   if (partialHeld.length) {
     const count = partialHeld.length;
-    bits.push(`${count} interrupted part${count === 1 ? "" : "s"} need review. Recover audio uploads ${count === 1 ? "it" : "them"} after you stop`);
+    const noun = count === 1 ? "1 interrupted part needs review" : `${count} interrupted parts need review`;
+    const pronoun = count === 1 ? "it" : "them";
+    const when = state.recording ? " after you stop" : "";
+    bits.push(`${noun}. Recover audio uploads ${pronoun}${when}`);
   }
   if (partialLoose.length) {
     const count = partialLoose.length;
-    bits.push(`${count} interrupted part${count === 1 ? "" : "s"} never joined a lecture. Recover audio downloads ${count === 1 ? "it" : "them"} after you stop`);
+    const noun = count === 1 ? "1 interrupted part never joined a lecture" : `${count} interrupted parts never joined a lecture`;
+    const pronoun = count === 1 ? "it" : "them";
+    const when = state.recording ? " after you stop" : "";
+    bits.push(`${noun}. Recover audio downloads ${pronoun}${when}`);
   }
   if (unassigned.length) {
-    bits.push(`${unassigned.length} part${unassigned.length === 1 ? "" : "s"} could not join a lecture. Use Recover audio after stopping to download ${unassigned.length === 1 ? "it" : "them"}`);
+    const count = unassigned.length;
+    const noun = count === 1 ? "1 part could not join a lecture" : `${count} parts could not join a lecture`;
+    const pronoun = count === 1 ? "it" : "them";
+    const when = state.recording ? " after stopping" : "";
+    bits.push(`${noun}. Use Recover audio${when} to download ${pronoun}`);
   }
   if (blocked.length) {
     bits.push(`${blocked.length} part${blocked.length === 1 ? " was" : "s were"} rejected by the server and will not retry until you use Recover audio`);
   }
   if (waiting.length) {
+    const count = waiting.length;
     bits.push(state.recording
-      ? "Completed parts retry automatically after recording stops"
-      : "Completed parts retry automatically");
+      ? (count === 1
+        ? "1 completed part retries automatically after recording stops"
+        : `${count} completed parts retry automatically after recording stops`)
+      : (count === 1
+        ? "1 completed part retries automatically"
+        : `${count} completed parts retry automatically`));
   }
   return `${bits.join(". ")}.`;
 }
@@ -1539,7 +1554,11 @@ function renderLectureHealth(detail) {
     const pendingAsr = detail.transcription_pending_chunks;
     parts.push(`${pendingAsr} part${pendingAsr === 1 ? '' : 's'} still transcribing`);
   }
-  if (failed) parts.push(`${failed} part${failed === 1 ? '' : 's'} need transcription retry`);
+  if (failed) {
+    parts.push(failed === 1
+      ? "1 part needs transcription retry"
+      : `${failed} parts need transcription retry`);
+  }
   if (detail.empty_transcript_chunks) {
     const silent = detail.empty_transcript_chunks;
     const noun = silent === 1 ? "part" : "parts";
@@ -1552,9 +1571,13 @@ function renderLectureHealth(detail) {
     parts.push(`AI cleanup is paused for ${cleanupPausePhrase(cooldown)} after repeated provider failures. Original transcript remains. Retry cleanup tries again now`);
     if (safeDetail) parts.push(safeDetail);
   } else if (providerFailed) {
-    parts.push(`${providerFailed} cleanup result${providerFailed === 1 ? '' : 's'} need retry; original transcript remains available`);
+    parts.push(providerFailed === 1
+      ? "1 cleanup result needs retry; original transcript remains available"
+      : `${providerFailed} cleanup results need retry; original transcript remains available`);
   } else if (cleanup && !guard) {
-    parts.push(`${cleanup} cleanup result${cleanup === 1 ? '' : 's'} need retry; original transcript remains available`);
+    parts.push(cleanup === 1
+      ? "1 cleanup result needs retry; original transcript remains available"
+      : `${cleanup} cleanup results need retry; original transcript remains available`);
   } else if (detail.cleanup_pending_chunks) {
     parts.push('Optional cleanup is still processing');
   }
@@ -1938,7 +1961,7 @@ copyInspectorPolished.addEventListener("click", async () => {
       body: JSON.stringify({ text: inspectorPolished.value }),
     });
   } catch (error) {
-    setStatus(error.message);
+    setStatus(idleUnsavedStatus("Polished draft was not copied.", error));
     return;
   }
   setStatus("Copied polished draft");
@@ -1952,7 +1975,7 @@ retryInspectorPolish.addEventListener("click", async () => {
     await refreshInspector();
     await sync();
   } catch (error) {
-    setStatus(error.message);
+    setStatus(idleUnsavedStatus("Cleanup retry did not start. The original transcript remains.", error));
   } finally {
     retryInspectorPolish.disabled = false;
   }
@@ -1965,7 +1988,7 @@ retryLecturePolish.addEventListener("click", async () => {
     setStatus("Retrying lecture polish");
     await sync();
   } catch (error) {
-    setStatus(error.message);
+    setStatus(idleUnsavedStatus("Cleanup retry did not start. The original transcript remains.", error));
   } finally {
     retryLecturePolish.disabled = false;
   }
@@ -2479,7 +2502,9 @@ el('retryTranscription').onclick = async () => {
   try {
     await api(`/api/sessions/${state.selectedId}/retry-transcription`, {method:'POST'});
     await sync();
-  } catch (error) { setStatus(error.message); }
+  } catch (error) {
+    setStatus(idleUnsavedStatus("Transcription retry did not start. Saved audio remains.", error));
+  }
   finally { el('retryTranscription').disabled = false; }
 };
 el('copyTranscriptPath').onclick = async () => {
@@ -2492,7 +2517,9 @@ el('copyTranscriptPath').onclick = async () => {
     setStatus(result.ready
       ? `Transcript path copied · ${result.path}`
       : `Path copied · file is empty until ASR finishes · ${result.path}`);
-  } catch (error) { setStatus(error.message); }
+  } catch (error) {
+    setStatus(idleUnsavedStatus("Transcript path was not copied.", error));
+  }
   finally { btn.disabled = false; }
 };
 async function automaticRecovery() {
