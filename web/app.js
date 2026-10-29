@@ -131,6 +131,16 @@ const NOTE_UNSAVED_NOTICE = "This note is still unsaved. Recording continues.";
 const NOTE_UNSAVED_IDLE = "This note is still unsaved.";
 const POLISH_UNSAVED_NOTICE = "This polish edit is still unsaved. Recording continues.";
 const POLISH_UNSAVED_IDLE = "This polish edit is still unsaved.";
+const OPEN_WHILE_RECORDING_NOTE = "Stop recording before opening another note.";
+const OPEN_WHILE_RECORDING_LECTURE = "Stop recording before opening another lecture.";
+const DELETE_WHILE_RECORDING_NOTE = "Stop recording before deleting this note.";
+const DELETE_WHILE_RECORDING_LECTURE = "Stop recording before deleting this lecture.";
+const RECORDING_BLOCKED_NOTICES = [
+  OPEN_WHILE_RECORDING_NOTE,
+  OPEN_WHILE_RECORDING_LECTURE,
+  DELETE_WHILE_RECORDING_NOTE,
+  DELETE_WHILE_RECORDING_LECTURE,
+];
 const QUESTION_UNSAVED_NOTICE = "Question saved in this browser; server save is still pending.";
 const QUESTION_TAB_ONLY_NOTICE = "This question is only in this tab until it saves. Keep this tab open.";
 const DRAFT_STORAGE_FULL_NOTICE = "Local draft storage is full. Keep this tab open until saved.";
@@ -145,6 +155,14 @@ function safeStatusDetail(error) {
   const detail = safeClientDetail(error);
   if (!detail || detail === "Request failed" || /^failed to fetch$/i.test(detail)) return "";
   return detail;
+}
+function captureStartStatus(error) {
+  const text = String(error?.message || "").replace(/\s+/g, " ").trim();
+  // Device errors can include a local path. A slash inside a word, such as
+  // "apps/screens", is ordinary guidance and stays.
+  const pathLike = /[\\]|(^|\s)\/|\b[A-Za-z]:[\\/]/.test(text);
+  if (!text || text.length > 240 || pathLike) return "Recording did not start.";
+  return text;
 }
 function idleUnsavedStatus(base, error) {
   const detail = safeStatusDetail(error);
@@ -248,6 +266,12 @@ function clearLiveCaptureNotices() {
       notice.textContent = stopped;
       notice.dataset.priority = "2";
     }
+    return;
+  }
+  // Opening or deleting is blocked only while this take is still recording.
+  if (RECORDING_BLOCKED_NOTICES.includes(current)) {
+    notice.textContent = "";
+    delete notice.dataset.priority;
     return;
   }
   if (current.includes("Recording continues")) {
@@ -783,10 +807,30 @@ function renderHistory() {
   }
 }
 async function selectItem(kind, id) {
-  if (state.recording) return;
-  await flushFinalSave();
-  await flushTurnSaves();
-  await flushSessionSave();
+  if (state.recording) {
+    if (state.selectedKind === kind && state.selectedId === id) return;
+    setStatus(kind === "note" ? OPEN_WHILE_RECORDING_NOTE : OPEN_WHILE_RECORDING_LECTURE, 0);
+    return;
+  }
+  try {
+    await flushFinalSave();
+    await flushTurnSaves();
+    await flushSessionSave();
+  } catch (_) {
+    return;
+  }
+  let detail;
+  try {
+    detail = kind === "note"
+      ? await api(`/api/notes/${id}`)
+      : await api(`/api/sessions/${id}`);
+  } catch (error) {
+    setStatus(idleUnsavedStatus(
+      kind === "note" ? "This note could not be opened." : "This lecture could not be opened.",
+      error,
+    ));
+    return;
+  }
   state.selectedKind = kind;
   state.selectedId = id;
   state.mode = kind === "note" ? "note" : "lecture";
@@ -794,10 +838,17 @@ async function selectItem(kind, id) {
   state.pinnedRoundId = null;
   roundInspector.classList.remove("on");
   if (kind === "note") {
-    renderNote(await api(`/api/notes/${id}`), true);
-    await refreshInspector();
+    renderNote(detail, true);
+    try {
+      await refreshInspector();
+    } catch (error) {
+      setStatus(idleUnsavedStatus("This note is open. Its latest round could not be loaded.", error));
+      applyMode();
+      renderHistory();
+      return;
+    }
   } else {
-    renderSession(await api(`/api/sessions/${id}`), true);
+    await renderSession(detail, true);
   }
   applyMode();
   renderHistory();
@@ -810,10 +861,11 @@ async function switchMode(mode) {
     await flushSessionSave();
   } catch (error) {
     setStatus(idleUnsavedStatus(NOTES_UNSAVED_IDLE, error));
+    return;
   }
   const kind = mode === "note" ? "note" : "session";
-  state.mode = mode;
   if (state.selectedKind === kind && state.selectedId) {
+    state.mode = mode;
     applyMode();
     renderHistory();
     return;
@@ -823,6 +875,7 @@ async function switchMode(mode) {
     await selectItem(kind, recent.id);
     return;
   }
+  state.mode = mode;
   state.selectedKind = kind;
   state.selectedId = null;
   if (kind === "note") {
@@ -1241,8 +1294,9 @@ async function startRecording(options = {}) {
     state.starting = false;
     el('audioSource').disabled = false;
     recordBtn.disabled = false;
-    el('captureNotice').textContent = error.message;
-    setStatus(error.message);
+    const startFailure = captureStartStatus(error);
+    el('captureNotice').textContent = startFailure;
+    setStatus(startFailure);
     return;
   }
   state.starting = false;
@@ -1953,7 +2007,12 @@ inspectorPolished.addEventListener("input", () => {
 });
 copyInspectorPolished.addEventListener("click", async () => {
   if (!inspectorPolished.value || !state.expandedRoundId) return;
-  await navigator.clipboard.writeText(inspectorPolished.value);
+  try {
+    await navigator.clipboard.writeText(inspectorPolished.value);
+  } catch (_) {
+    setStatus("This polished draft was not copied. Clipboard unavailable.", 0);
+    return;
+  }
   try {
     await api(`/api/events/${state.expandedRoundId}/copy`, {
       method: "POST",
@@ -1961,7 +2020,7 @@ copyInspectorPolished.addEventListener("click", async () => {
       body: JSON.stringify({ text: inspectorPolished.value }),
     });
   } catch (error) {
-    setStatus(idleUnsavedStatus("Polished draft was not copied.", error));
+    setStatus(idleUnsavedStatus("Copied to the clipboard. The polished draft copy was not recorded.", error), 0);
     return;
   }
   setStatus("Copied polished draft");
@@ -1994,9 +2053,20 @@ retryLecturePolish.addEventListener("click", async () => {
   }
 });
 async function deleteHistoryItem(kind, id) {
-  if (state.recording) return;
+  if (state.recording) {
+    setStatus(kind === "note" ? DELETE_WHILE_RECORDING_NOTE : DELETE_WHILE_RECORDING_LECTURE, 0);
+    return;
+  }
   const path = kind === "note" ? `/api/notes/${id}` : `/api/sessions/${id}`;
-  await api(path, { method: "DELETE" });
+  try {
+    await api(path, { method: "DELETE" });
+  } catch (error) {
+    const base = kind === "note"
+      ? "This note could not be deleted. It is still in the list."
+      : "This lecture could not be deleted. It is still in the list.";
+    setStatus(idleUnsavedStatus(base, error));
+    return;
+  }
   if (state.selectedId === id) {
     state.selectedId = null;
     state.note = null;
@@ -2160,7 +2230,7 @@ async function draftClassQuestion(noteThought = "") {
       `Ready · ${result.context_source || "transcribed lecture context"}. Review below, then use or copy it.`);
   } catch (error) {
     if (questionRequest !== request || state.selectedId !== id) return;
-    questionStatus(request.timedOut ? "No response after 30 seconds. Your question is safe. Retry when ready; the server may still finish." : `${error.message}. Your question is unchanged. Retry when ready.`, "error");
+    questionStatus(request.timedOut ? "No response after 30 seconds. Your question is safe. Retry when ready; the server may still finish." : `${safeClientDetail(error)}. Your question is unchanged. Retry when ready.`, "error");
   } finally {
     if (questionRequest === request) {
       const failed = el("questionStatus").dataset.state === "error";
@@ -2174,7 +2244,12 @@ draftQuestionBtn.addEventListener("click", () => {
 });
 copyQuestionBtn.addEventListener("click", async () => {
   if (!questionOut.value) return;
-  await navigator.clipboard.writeText(questionOut.value);
+  try {
+    await navigator.clipboard.writeText(questionOut.value);
+  } catch (_) {
+    setStatus("This question was not copied. Clipboard unavailable.", 0);
+    return;
+  }
   setStatus("Copied question");
 });
 questionRefine.addEventListener("keydown", (event) => {
@@ -2183,22 +2258,50 @@ questionRefine.addEventListener("keydown", (event) => {
   draftClassQuestion();
 });
 copyNoteBtn.addEventListener("click", async () => {
-  if (state.mode === "note") {
-    await flushFinalSave();
+  const noteMode = state.mode === "note";
+  try {
+    if (noteMode) await flushFinalSave();
+    else await flushSessionSave();
+  } catch (_) {
+    return;
+  }
+  if (noteMode) {
     if (!state.selectedId) return;
-    const result = await api(`/api/notes/${state.selectedId}/copy`, { method: "POST" });
-    await navigator.clipboard.writeText(result.text);
-  } else {
-    await flushSessionSave();
-    if (!lectureDraft.value) return;
+    let text = "";
+    try {
+      const result = await api(`/api/notes/${state.selectedId}/copy`, { method: "POST" });
+      text = result.text || "";
+    } catch (error) {
+      setStatus(idleUnsavedStatus("This note was not copied.", error), 0);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (_) {
+      setStatus("This note was not copied. Clipboard unavailable.", 0);
+      return;
+    }
+    setStatus("Copied note");
+    return;
+  }
+  if (!lectureDraft.value || !state.selectedId) return;
+  try {
     await navigator.clipboard.writeText(lectureDraft.value);
+  } catch (_) {
+    setStatus("This lecture was not copied. Clipboard unavailable.", 0);
+    return;
+  }
+  try {
     await api(`/api/sessions/${state.selectedId}/copy`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: lectureDraft.value }),
     });
+  } catch (error) {
+    setStatus(idleUnsavedStatus("Copied to the clipboard. The saved lecture copy was not updated.", error), 0);
+    return;
   }
-  setStatus("Copied");
+  setStatus("Copied lecture");
 });
 newBtn.addEventListener("click", async () => {
   if (state.recording) return;

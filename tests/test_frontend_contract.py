@@ -65,7 +65,34 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "Cleanup retry did not start. The original transcript remains." in javascript
     assert "Transcription retry did not start. Saved audio remains." in javascript
     assert "Transcript path was not copied." in javascript
-    assert "Polished draft was not copied." in javascript
+    assert "This polished draft was not copied. Clipboard unavailable." in javascript
+    assert "Copied to the clipboard. The polished draft copy was not recorded." in javascript
+    assert "This lecture was not copied. Clipboard unavailable." in javascript
+    assert "Copied to the clipboard. The saved lecture copy was not updated." in javascript
+    assert "This note was not copied. Clipboard unavailable." in javascript
+    assert "This question was not copied. Clipboard unavailable." in javascript
+    assert "Copied lecture" in javascript
+    assert "Copied note" in javascript
+    assert "Stop recording before opening another lecture." in javascript
+    assert "Stop recording before opening another note." in javascript
+    assert "Stop recording before deleting this lecture." in javascript
+    assert "Stop recording before deleting this note." in javascript
+    assert "This lecture could not be opened." in javascript
+    assert "This note could not be opened." in javascript
+    assert "This note is open. Its latest round could not be loaded." in javascript
+    assert "This lecture could not be deleted. It is still in the list." in javascript
+    assert "This note could not be deleted. It is still in the list." in javascript
+    assert "Recording did not start." in javascript
+    start_status = javascript.split("function captureStartStatus", 1)[1].split("function ", 1)[0]
+    assert "text.length > 240" in start_status
+    assert "(^|\\s)\\/" in start_status
+    assert "/[\\\\/]/.test" not in start_status
+    share_guidance = (ROOT / "web" / "capture.js").read_text(encoding="utf-8")
+    assert "apps/screens" in share_guidance
+    select_item = javascript.split("async function selectItem", 1)[1].split("async function switchMode", 1)[0]
+    assert select_item.index("await api") < select_item.index("state.selectedId = id")
+    assert "${safeClientDetail(error)}. Your question is unchanged." in javascript
+    assert "${error.message}. Your question is unchanged." not in javascript
     assert "setStatus(error.message)" not in javascript.split("copyInspectorPolished.addEventListener", 1)[1].split("retryInspectorPolish", 1)[0]
     assert "will not retry until you use Recover audio" in javascript
     assert "not marked ended yet" in javascript
@@ -290,6 +317,7 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert 'current.startsWith("Lecture setup failed")' in stopped_notices
     assert 'current.startsWith("Note setup failed")' in stopped_notices
     assert "state.discard" in stopped_notices
+    assert "RECORDING_BLOCKED_NOTICES" in stopped_notices
     assert "Recording continues\\.$" in stopped_notices
     assert 'current.includes("Recording continues")' in stopped_notices
     setup_notice = javascript.split("function setupFailureNotice", 1)[1].split("function ", 1)[0]
