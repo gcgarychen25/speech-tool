@@ -168,6 +168,16 @@ function idleUnsavedStatus(base, error) {
   const detail = safeStatusDetail(error);
   return detail ? `${base} ${detail}` : base;
 }
+function keepUnsavedInsteadOfCopy(idleBase, copyClause) {
+  // While recording, the unsaved notice stays. Do not replace it with a copy claim.
+  if (state.recording || state.noteTakePending) return;
+  const current = state.lastStatus || "";
+  const prefix = `${idleBase} `;
+  const extra = current.startsWith(prefix) ? current.slice(prefix.length).trim() : "";
+  const already = extra === copyClause || extra.startsWith(`${copyClause} `);
+  const rest = already ? extra : `${copyClause}${extra ? ` ${extra}` : ""}`;
+  setStatus(`${idleBase} ${rest}`);
+}
 function liveCaptureStatus() {
   if (state.recordingMode === "note") {
     return state.note ? `Recording round ${(state.note.turn_count || 0) + 1}` : "Recording note";
@@ -1991,7 +2001,9 @@ async function clearContinuousNote() {
   }
   state.finalDirty = true;
   await saveFinal(true);
-  if (!noteFinal.value) setStatus("Cleared");
+  // An empty box is not cleared until that text is stored.
+  if (noteFinal.value || state.finalDirty || state.finalPending) return;
+  setStatus("Cleared");
 }
 clearNoteBtn.addEventListener("click", () => {
   clearContinuousNote();
@@ -2094,15 +2106,44 @@ lectureDraft.addEventListener("input", () => {
   cacheLectureDraft();
   state.lectureSaveTimer = setTimeout(() => flushSessionSave().catch(() => {}), 500);
 });
+let courseSaveSerial = 0;
 courseEl.addEventListener("change", async () => {
   if (state.selectedKind !== "session" || !state.selectedId) return;
-  await flushSessionSave();
-  const detail = await api(`/api/sessions/${state.selectedId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ course: courseEl.value }),
-  });
-  if (detail.id === state.selectedId) state.sessionRevision = detail.revision;
+  const id = state.selectedId;
+  const next = courseEl.value;
+  const previous = state.session?.id === id ? (state.session.course || "") : "";
+  const serial = ++courseSaveSerial;
+  const restoreCourse = () => {
+    if (serial !== courseSaveSerial || state.selectedId !== id || courseEl.value !== next) return;
+    courseEl.value = state.session?.id === id ? (state.session.course || "") : previous;
+  };
+  try {
+    await flushSessionSave();
+  } catch (_) {
+    restoreCourse();
+    return;
+  }
+  if (serial !== courseSaveSerial || state.selectedId !== id) return;
+  try {
+    const detail = await api(`/api/sessions/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ course: next }),
+    });
+    if (serial !== courseSaveSerial || detail.id !== state.selectedId) return;
+    state.sessionRevision = detail.revision;
+    const savedCourse = detail.course ?? next;
+    if (state.session?.id === detail.id) state.session.course = savedCourse;
+    if (courseEl.value === next) courseEl.value = savedCourse;
+    const item = state.history.find((row) => row.kind === "session" && row.id === detail.id);
+    if (item) {
+      item.course = savedCourse;
+      renderHistory();
+    }
+  } catch (error) {
+    restoreCourse();
+    setStatus(idleUnsavedStatus("This course was not saved.", error), 0);
+  }
 });
 stampBtn.addEventListener("click", () => {
   const parts = timerEl.textContent.split(":");
@@ -2263,10 +2304,15 @@ copyNoteBtn.addEventListener("click", async () => {
     if (noteMode) await flushFinalSave();
     else await flushSessionSave();
   } catch (_) {
+    if (!noteMode) keepUnsavedInsteadOfCopy(NOTES_UNSAVED_IDLE, "The lecture was not copied.");
     return;
   }
   if (noteMode) {
     if (!state.selectedId) return;
+    if (state.finalDirty || state.finalPending) {
+      keepUnsavedInsteadOfCopy(NOTE_UNSAVED_IDLE, "It was not copied.");
+      return;
+    }
     let text = "";
     try {
       const result = await api(`/api/notes/${state.selectedId}/copy`, { method: "POST" });

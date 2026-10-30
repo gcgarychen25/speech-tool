@@ -71,6 +71,9 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "Copied to the clipboard. The saved lecture copy was not updated." in javascript
     assert "This note was not copied. Clipboard unavailable." in javascript
     assert "This question was not copied. Clipboard unavailable." in javascript
+    assert "It was not copied." in javascript
+    assert "The lecture was not copied." in javascript
+    assert "This course was not saved." in javascript
     assert "Copied lecture" in javascript
     assert "Copied note" in javascript
     assert "Stop recording before opening another lecture." in javascript
@@ -284,6 +287,18 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "Copy note" in html
     assert ">Clear</button>" in html
     assert "clearContinuousNote" in javascript
+    clear_note = javascript.split("async function clearContinuousNote", 1)[1].split("clearNoteBtn.addEventListener", 1)[0]
+    assert 'setStatus("Cleared")' in clear_note
+    assert clear_note.index("state.finalDirty") < clear_note.index('setStatus("Cleared")')
+    assert "state.finalPending" in clear_note
+    copy_click = javascript.split('copyNoteBtn.addEventListener("click"', 1)[1].split("newBtn.addEventListener", 1)[0]
+    assert copy_click.index("state.finalDirty") < copy_click.index("/api/notes/${state.selectedId}/copy")
+    assert "keepUnsavedInsteadOfCopy(NOTE_UNSAVED_IDLE, \"It was not copied.\")" in copy_click
+    assert "keepUnsavedInsteadOfCopy(NOTES_UNSAVED_IDLE, \"The lecture was not copied.\")" in copy_click
+    course_change = javascript.split('courseEl.addEventListener("change"', 1)[1].split("stampBtn.addEventListener", 1)[0]
+    assert "restoreCourse" in course_change
+    assert "This course was not saved." in course_change
+    assert course_change.index("await flushSessionSave()") < course_change.index("course: next")
     assert "Lecture" in html
     start = javascript.split("async function startRecording", 1)[1]
     setup_fail = start.split("function finishRecording", 1)[0]
