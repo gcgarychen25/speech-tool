@@ -123,6 +123,12 @@ function holdNoteTakeStatus() {
   statusEl.textContent = NOTE_TAKE_SAVING_STATUS;
   state.lastStatus = NOTE_TAKE_SAVING_STATUS;
 }
+function blockWhileNoteTakeSaving() {
+  if (!state.noteTakePending) return false;
+  // The take is posted to the note that was recording. Do not open another one yet.
+  holdNoteTakeStatus();
+  return true;
+}
 const HISTORY_REFRESH_NOTICE = "History could not refresh. Recording continues.";
 const HISTORY_REFRESH_IDLE = "History could not refresh.";
 const NOTES_UNSAVED_NOTICE = "Your lecture notes are still unsaved. Recording continues.";
@@ -146,6 +152,33 @@ const QUESTION_TAB_ONLY_NOTICE = "This question is only in this tab until it sav
 const DRAFT_STORAGE_FULL_NOTICE = "Local draft storage is full. Keep this tab open until saved.";
 const NOTE_TAKE_SAVING_STATUS = "Saving this note take. Keep this tab open until it is stored.";
 const HISTORY_DURING_NOTE_SAVE = "History could not refresh. This note take is still saving. Keep this tab open.";
+function editorUnsavedKind() {
+  if (state.finalDirty || state.finalPending) return "note";
+  const polish = state.expandedRoundId
+    ? state.turnSaves.get(`${state.expandedRoundId}:polished`)
+    : null;
+  if (polish && (polish.dirty || polish.pending)) return "polish";
+  if (state.lectureDirty || state.notesDirty || state.sessionSavePending) return "lecture";
+  return "";
+}
+function blockWhileEditorUnsaved() {
+  const kind = editorUnsavedKind();
+  if (!kind) return false;
+  const idle = kind === "note" ? NOTE_UNSAVED_IDLE
+    : kind === "polish" ? POLISH_UNSAVED_IDLE
+    : NOTES_UNSAVED_IDLE;
+  const live = kind === "note" ? NOTE_UNSAVED_NOTICE
+    : kind === "polish" ? POLISH_UNSAVED_NOTICE
+    : NOTES_UNSAVED_NOTICE;
+  // Leave the editor in place. A failed save already includes the request detail.
+  if (state.recording || state.noteTakePending) {
+    showCaptureNotice(live, 1);
+    return true;
+  }
+  const current = state.lastStatus || "";
+  if (current !== idle && !current.startsWith(`${idle} `)) setStatus(idle);
+  return true;
+}
 function safeClientDetail(error) {
   const text = String(error?.message || "Request failed").replace(/\s+/g, " ").trim();
   if (!text || text.length > 180 || /[\\/]/.test(text)) return "Request failed";
@@ -718,24 +751,42 @@ function noteCleanupPause(detail) {
   return ` · paused for ${cleanupPausePhrase(cooldown)} · Retry polish tries again now`;
 }
 async function showRoundPolish(turnId) {
-  if (!state.note || !turnId) return;
+  if (!state.note || !turnId) return false;
   const keepFinalFocus = document.activeElement === noteFinal;
-  if (state.expandedRoundId && state.expandedRoundId !== turnId) {
+  const previousId = state.expandedRoundId;
+  if (previousId && previousId !== turnId) {
     await flushTurnSaves();
+    // The polish box is shared. Leave the unsaved round on screen.
+    if (editorUnsavedKind() === "polish") {
+      blockWhileEditorUnsaved();
+      return false;
+    }
   }
   state.expandedRoundId = turnId;
   roundInspector.classList.add("on");
   renderRounds(state.note);
-  const detail = await api(`/api/notes/${state.note.id}/turns/${turnId}`);
-  if (state.expandedRoundId !== turnId) return;
-  updateInspectorFields(detail, latestTurn(state.note)?.id === turnId);
-  if (keepFinalFocus) noteFinal.focus({ preventScroll: true });
+  try {
+    const detail = await api(`/api/notes/${state.note.id}/turns/${turnId}`);
+    if (state.expandedRoundId !== turnId) return false;
+    updateInspectorFields(detail, latestTurn(state.note)?.id === turnId);
+    if (keepFinalFocus) noteFinal.focus({ preventScroll: true });
+    return true;
+  } catch (error) {
+    if (state.expandedRoundId !== turnId) return false;
+    state.expandedRoundId = previousId;
+    if (!previousId) roundInspector.classList.remove("on");
+    renderRounds(state.note);
+    setStatus(idleUnsavedStatus("This round could not be opened.", error), 0);
+    return false;
+  }
 }
 async function selectRound(turnId) {
   if (!state.note) return;
   const latestId = latestTurn(state.note)?.id;
+  const opened = await showRoundPolish(turnId);
+  if (!opened) return;
   state.pinnedRoundId = turnId === latestId ? null : turnId;
-  await showRoundPolish(turnId);
+  renderRounds(state.note);
 }
 async function refreshInspector() {
   if (!state.note) return;
@@ -822,6 +873,7 @@ async function selectItem(kind, id) {
     setStatus(kind === "note" ? OPEN_WHILE_RECORDING_NOTE : OPEN_WHILE_RECORDING_LECTURE, 0);
     return;
   }
+  if (blockWhileNoteTakeSaving()) return;
   try {
     await flushFinalSave();
     await flushTurnSaves();
@@ -829,6 +881,7 @@ async function selectItem(kind, id) {
   } catch (_) {
     return;
   }
+  if (blockWhileEditorUnsaved()) return;
   let detail;
   try {
     detail = kind === "note"
@@ -865,6 +918,7 @@ async function selectItem(kind, id) {
 }
 async function switchMode(mode) {
   if (state.recording || state.mode === mode) return;
+  if (blockWhileNoteTakeSaving()) return;
   try {
     await flushFinalSave();
     await flushTurnSaves();
@@ -873,6 +927,7 @@ async function switchMode(mode) {
     setStatus(idleUnsavedStatus(NOTES_UNSAVED_IDLE, error));
     return;
   }
+  if (blockWhileEditorUnsaved()) return;
   const kind = mode === "note" ? "note" : "session";
   if (state.selectedKind === kind && state.selectedId) {
     state.mode = mode;
@@ -1406,14 +1461,22 @@ const stopRecording = () => finishRecording(false);
 const discardRecording = () => finishRecording(true);
 async function saveNoteTurn(blob) {
   if (state.captureReady) await state.captureReady;
+  // Bind the note that finished recording. A later selection must not receive this take.
+  const noteId = state.selectedId;
+  const noteRecord = state.note;
+  if (!noteId || !noteRecord) throw new Error("The note for this take is not ready");
   const form = new FormData();
   form.append("file", blob, "recording.webm");
   setStatus(NOTE_TAKE_SAVING_STATUS);
-  const turn = await api(`/api/notes/${state.selectedId}/turns`, {
+  const turn = await api(`/api/notes/${noteId}/turns`, {
     method: "POST",
     body: form,
   });
   state.releaseNoteTakeHold?.();
+  if (state.selectedId !== noteId || state.note !== noteRecord) {
+    await sync();
+    return;
+  }
   const summary = {
     ...turn,
     asr_draft: null,
@@ -2069,6 +2132,7 @@ async function deleteHistoryItem(kind, id) {
     setStatus(kind === "note" ? DELETE_WHILE_RECORDING_NOTE : DELETE_WHILE_RECORDING_LECTURE, 0);
     return;
   }
+  if (blockWhileNoteTakeSaving()) return;
   const path = kind === "note" ? `/api/notes/${id}` : `/api/sessions/${id}`;
   try {
     await api(path, { method: "DELETE" });
@@ -2121,6 +2185,11 @@ courseEl.addEventListener("change", async () => {
     await flushSessionSave();
   } catch (_) {
     restoreCourse();
+    if (state.recording || state.noteTakePending) {
+      showCaptureNotice(`This course was not saved. ${NOTES_UNSAVED_NOTICE}`, 1);
+    } else {
+      keepUnsavedInsteadOfCopy(NOTES_UNSAVED_IDLE, "This course was not saved.");
+    }
     return;
   }
   if (serial !== courseSaveSerial || state.selectedId !== id) return;
@@ -2350,13 +2419,23 @@ copyNoteBtn.addEventListener("click", async () => {
   setStatus("Copied lecture");
 });
 newBtn.addEventListener("click", async () => {
-  if (state.recording) return;
+  if (state.recording || blockWhileNoteTakeSaving()) return;
   if (state.mode === "note") {
     await flushFinalSave();
     await flushTurnSaves();
-    await createAndSelectNote();
+    if (blockWhileEditorUnsaved()) return;
+    try {
+      await createAndSelectNote();
+    } catch (error) {
+      setStatus(idleUnsavedStatus("A new note was not created.", error));
+    }
   } else {
-    await flushSessionSave();
+    try {
+      await flushSessionSave();
+    } catch (_) {
+      return;
+    }
+    if (blockWhileEditorUnsaved()) return;
     state.selectedId = null;
     state.session = null;
     listenerNotes.value = "";

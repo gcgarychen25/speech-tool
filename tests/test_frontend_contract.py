@@ -20,7 +20,7 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "incomingPane" not in html
     assert javascript.count("createElement(\"textarea\")") == 0
     assert "inspectorAsr" not in javascript
-    assert "/api/notes/${state.selectedId}/turns" in javascript
+    assert "/api/notes/${noteId}/turns" in javascript
     assert "/api/notes/${state.note.id}/turns/${turnId}" in javascript
     assert "flushFinalSave()" in javascript
     assert "flushTurnSaves()" in javascript
@@ -93,6 +93,10 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     share_guidance = (ROOT / "web" / "capture.js").read_text(encoding="utf-8")
     assert "apps/screens" in share_guidance
     select_item = javascript.split("async function selectItem", 1)[1].split("async function switchMode", 1)[0]
+    assert "blockWhileNoteTakeSaving()" in select_item
+    assert select_item.index("blockWhileNoteTakeSaving()") < select_item.index("await flushFinalSave()")
+    assert "blockWhileEditorUnsaved()" in select_item
+    assert select_item.index("blockWhileEditorUnsaved()") < select_item.index("await api")
     assert select_item.index("await api") < select_item.index("state.selectedId = id")
     assert "${safeClientDetail(error)}. Your question is unchanged." in javascript
     assert "${error.message}. Your question is unchanged." not in javascript
@@ -224,6 +228,9 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "Saving this note take. Keep this tab open until it is stored." in javascript
     assert "History could not refresh. This note take is still saving. Keep this tab open." in javascript
     note_save = javascript.split("async function saveNoteTurn", 1)[1].split("async function ", 1)[0]
+    assert note_save.index("const noteId = state.selectedId") < note_save.index("/api/notes/${noteId}/turns")
+    assert "state.selectedId !== noteId" in note_save
+    assert "The note for this take is not ready" in note_save
     assert note_save.index("releaseNoteTakeHold") < note_save.index("· transcribing")
     recorder_stop = javascript.split("async function onRecorderStop", 1)[1].split("async function ", 1)[0]
     assert recorder_stop.index("noteTakePending") < recorder_stop.index("await recorder.backupChain")
@@ -298,6 +305,8 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     course_change = javascript.split('courseEl.addEventListener("change"', 1)[1].split("stampBtn.addEventListener", 1)[0]
     assert "restoreCourse" in course_change
     assert "This course was not saved." in course_change
+    assert 'keepUnsavedInsteadOfCopy(NOTES_UNSAVED_IDLE, "This course was not saved.")' in course_change
+    assert "This course was not saved. ${NOTES_UNSAVED_NOTICE}" in course_change
     assert course_change.index("await flushSessionSave()") < course_change.index("course: next")
     assert "Lecture" in html
     start = javascript.split("async function startRecording", 1)[1]
@@ -350,6 +359,23 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     switch_mode = javascript.split("async function switchMode", 1)[1].split("function resetQuestionFields", 1)[0]
     assert "NOTES_UNSAVED_IDLE" in switch_mode
     assert "error.message" not in switch_mode
+    assert "blockWhileNoteTakeSaving()" in switch_mode
+    assert switch_mode.index("blockWhileNoteTakeSaving()") < switch_mode.index("await flushFinalSave()")
+    assert "blockWhileEditorUnsaved()" in switch_mode
+    assert switch_mode.index("blockWhileEditorUnsaved()") < switch_mode.index("state.mode = mode")
+    round_polish = javascript.split("async function showRoundPolish", 1)[1].split("async function selectRound", 1)[0]
+    assert 'editorUnsavedKind() === "polish"' in round_polish
+    assert "This round could not be opened." in round_polish
+    assert "previousId" in round_polish
+    select_round = javascript.split("async function selectRound", 1)[1].split("async function refreshInspector", 1)[0]
+    assert select_round.index("await showRoundPolish(turnId)") < select_round.index("state.pinnedRoundId")
+    new_note = javascript.split('newBtn.addEventListener("click"', 1)[1].split("noteModeBtn.onclick", 1)[0]
+    assert "blockWhileNoteTakeSaving()" in new_note
+    assert "blockWhileEditorUnsaved()" in new_note
+    assert "A new note was not created." in new_note
+    assert new_note.index("blockWhileEditorUnsaved()") < new_note.index("await createAndSelectNote()")
+    delete_item = javascript.split("async function deleteHistoryItem", 1)[1].split("listenerNotes.addEventListener", 1)[0]
+    assert delete_item.index("blockWhileNoteTakeSaving()") < delete_item.index("method: \"DELETE\"")
     assert start.index("SpeechCapture.open") < start.index("prepareRecordingTarget")
     assert "forceNew" in javascript
     assert "isFreshLecture" in javascript
