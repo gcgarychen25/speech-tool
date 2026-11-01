@@ -71,6 +71,15 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "Copied to the clipboard. The saved lecture copy was not updated." in javascript
     assert "This note was not copied. Clipboard unavailable." in javascript
     assert "This question was not copied. Clipboard unavailable." in javascript
+    question_save = javascript.split('questionOut.addEventListener("input"', 1)[1].split("async function claimCapture", 1)[0]
+    assert "questionSaveSerial" in question_save
+    assert "rememberAcceptedQuestion(id, text, serial)" in question_save
+    assert question_save.index("rememberAcceptedQuestion(id, text, serial)") < question_save.index("questionSavedText.get(id) === questionOut.value")
+    assert question_save.index("questionSavedText.get(id) === questionOut.value") < question_save.index("showQuestionSaveFailure()")
+    accepted = javascript.split("function clearAcceptedQuestionSave", 1)[1].split("function rememberAcceptedQuestion", 1)[0]
+    assert "QUESTION_UNSAVED_NOTICE" in accepted
+    assert "QUESTION_TAB_ONLY_NOTICE" in accepted
+    assert 'state.selectedId === id' in javascript.split("function questionSaveIsCurrent", 1)[1].split("function questionEditorShows", 1)[0]
     assert "It was not copied." in javascript
     assert "The lecture was not copied." in javascript
     assert "This course was not saved." in javascript

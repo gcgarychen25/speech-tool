@@ -2532,10 +2532,44 @@ document.addEventListener("keydown", (event) => {
   }
 });
 const questionTimers = new Map();
+const questionSaveSerial = new Map();
+const questionSavedText = new Map();
+function questionSaveIsCurrent(id, serial) {
+  return questionSaveSerial.get(id) === serial
+    && state.selectedKind === "session"
+    && state.selectedId === id;
+}
+function questionEditorShows(id, text) {
+  return state.selectedKind === "session" && state.selectedId === id && questionOut.value === text;
+}
+function clearAcceptedQuestionSave() {
+  clearCaptureNotice(QUESTION_TAB_ONLY_NOTICE);
+  clearCaptureNotice(QUESTION_UNSAVED_NOTICE);
+  if (state.recording || state.noteTakePending) return;
+  const current = state.lastStatus || "";
+  if (current === QUESTION_TAB_ONLY_NOTICE || current === QUESTION_UNSAVED_NOTICE) setStatus("");
+}
+function rememberAcceptedQuestion(id, text, serial) {
+  if (questionSaveIsCurrent(id, serial) || questionEditorShows(id, text)) questionSavedText.set(id, text);
+  if (!questionEditorShows(id, text)) return;
+  state.questionUncached = false;
+  clearAcceptedQuestionSave();
+}
+function showQuestionSaveFailure() {
+  if (state.questionUncached) {
+    if (state.recording) showCaptureNotice(QUESTION_TAB_ONLY_NOTICE, 2);
+    else setStatus(QUESTION_TAB_ONLY_NOTICE, 2);
+    return;
+  }
+  if (state.recording) showCaptureNotice(QUESTION_UNSAVED_NOTICE, 1);
+  else setStatus(QUESTION_UNSAVED_NOTICE);
+}
 questionOut.addEventListener("input", () => {
   copyQuestionBtn.disabled = !questionOut.value.trim();
   const id = state.selectedId, text = questionOut.value;
   if (!id || state.selectedKind !== "session") return;
+  const serial = (questionSaveSerial.get(id) || 0) + 1;
+  questionSaveSerial.set(id, serial);
   try {
     localStorage.setItem(`speech-question-${id}`, text);
     state.questionUncached = false;
@@ -2551,21 +2585,15 @@ questionOut.addEventListener("input", () => {
     try {
       await api(`/api/sessions/${id}/questions/edit`, {method: "POST",
         headers: {"Content-Type": "application/json"}, body: JSON.stringify({text})});
-      if (questionOut.value === text) {
-        state.questionUncached = false;
-        clearCaptureNotice(QUESTION_TAB_ONLY_NOTICE);
-        if (!state.recording && state.lastStatus === QUESTION_TAB_ONLY_NOTICE) setStatus("");
-      }
       if (localStorage.getItem(`speech-question-${id}`) === text) {
         localStorage.removeItem(`speech-question-${id}`);
-        clearCaptureNotice(QUESTION_UNSAVED_NOTICE);
       }
+      // Only the text still on screen for this lecture clears the pending notice.
+      rememberAcceptedQuestion(id, text, serial);
     } catch (_) {
-      if (state.questionUncached) {
-        if (state.recording) showCaptureNotice(QUESTION_TAB_ONLY_NOTICE, 2);
-        else setStatus(QUESTION_TAB_ONLY_NOTICE, 2);
-      } else if (state.recording) showCaptureNotice(QUESTION_UNSAVED_NOTICE, 1);
-      else setStatus(QUESTION_UNSAVED_NOTICE);
+      if (!questionSaveIsCurrent(id, serial)) return;
+      if (questionSavedText.get(id) === questionOut.value) return;
+      showQuestionSaveFailure();
     }
   }, 400));
 });
