@@ -264,6 +264,35 @@ function clearSavedEditNotice(recordingNotice, idleNotice) {
   clearCaptureNotice(idleNotice);
   clearIdleUnsavedStatus(idleNotice);
 }
+function revealStillUnsaved(recordingNotice, idleNotice) {
+  if (state.recording) {
+    showCaptureNotice(recordingNotice, 1);
+    return;
+  }
+  const current = state.lastStatus || "";
+  if (current === idleNotice || current.startsWith(`${idleNotice} `)) return;
+  setStatus(idleNotice);
+}
+function noteSaveStillShown(noteId, text) {
+  return state.selectedKind === "note"
+    && state.selectedId === noteId
+    && state.note?.id === noteId
+    && !state.finalDirty
+    && noteFinal.value === text;
+}
+function polishSaveStillShown(save, text) {
+  return state.selectedKind === "note"
+    && state.expandedRoundId === save.turnId
+    && !save.dirty
+    && inspectorPolished.value === text;
+}
+function lectureSaveStillShown(id, draft, notes, saveDraft, saveNotes) {
+  if (state.selectedKind !== "session" || state.selectedId !== id) return false;
+  if (state.lectureDirty || state.notesDirty) return false;
+  if (saveDraft && lectureDraft.value !== draft) return false;
+  if (saveNotes && listenerNotes.value !== notes) return false;
+  return true;
+}
 function clearLiveCaptureNotices() {
   const notice = el("captureNotice");
   const current = notice.textContent || "";
@@ -520,7 +549,7 @@ function turnSaveState(turnId, branch, initial = "") {
   const key = `${turnId}:${branch}`;
   if (!state.turnSaves.has(key)) {
     state.turnSaves.set(key, {
-      key, turnId, branch, applied: initial || "", dirty: false,
+      key, turnId, branch, applied: initial || "", accepted: initial || "", dirty: false,
       timer: null, chain: Promise.resolve(), pending: 0,
     });
   }
@@ -540,9 +569,25 @@ async function saveTurn(save, textarea) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
       });
-      clearSavedEditNotice(POLISH_UNSAVED_NOTICE, POLISH_UNSAVED_IDLE);
+      // This request stored `text`. A newer keystroke keeps the unsaved warning.
+      save.accepted = text;
+      if (polishSaveStillShown(save, text)) {
+        clearSavedEditNotice(POLISH_UNSAVED_NOTICE, POLISH_UNSAVED_IDLE);
+      } else if (state.selectedKind === "note" && state.expandedRoundId === save.turnId && inspectorPolished.value !== text) {
+        revealStillUnsaved(POLISH_UNSAVED_NOTICE, POLISH_UNSAVED_IDLE);
+      }
     } catch (error) {
+      // A newer save already captured the box. Its result owns the warning.
+      if (save.applied !== text) return;
+      const onThisRound = state.selectedKind === "note" && state.expandedRoundId === save.turnId;
+      if (onThisRound && inspectorPolished.value === save.accepted) {
+        save.dirty = false;
+        save.applied = save.accepted;
+        clearSavedEditNotice(POLISH_UNSAVED_NOTICE, POLISH_UNSAVED_IDLE);
+        return;
+      }
       save.dirty = true;
+      if (!onThisRound) return;
       if (state.recording) showCaptureNotice(POLISH_UNSAVED_NOTICE, 1);
       else setStatus(idleUnsavedStatus(POLISH_UNSAVED_IDLE, error));
     } finally {
@@ -556,10 +601,20 @@ async function flushTurnSaves() {
   if (!state.expandedRoundId) return;
   await saveTurn(turnSaveState(state.expandedRoundId, "polished"), inspectorPolished);
 }
+let noteSaveSerial = 0;
+function settleNoteSave(id, text, revision) {
+  applyFinalResult(id, text, revision);
+  if (noteSaveStillShown(id, text ?? "")) {
+    clearSavedEditNotice(NOTE_UNSAVED_NOTICE, NOTE_UNSAVED_IDLE);
+  } else if (state.selectedKind === "note" && state.selectedId === id && state.finalDirty) {
+    revealStillUnsaved(NOTE_UNSAVED_NOTICE, NOTE_UNSAVED_IDLE);
+  }
+}
 async function saveFinal(force = false) {
   clearTimeout(state.finalTimer);
   if (!state.note || (!state.finalDirty && !force)) return state.finalChain;
   const id = state.note.id;
+  const serial = ++noteSaveSerial;
   const payload = {
     base_revision: state.finalRevision,
     base_text: state.finalBaseText,
@@ -575,9 +630,10 @@ async function saveFinal(force = false) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      applyFinalResult(id, result.final_text, result.final_revision);
-      clearSavedEditNotice(NOTE_UNSAVED_NOTICE, NOTE_UNSAVED_IDLE);
+      if (serial !== noteSaveSerial) return;
+      settleNoteSave(id, result.final_text, result.final_revision);
     } catch (error) {
+      if (serial !== noteSaveSerial) return;
       if (error.status === 409 && error.detail?.final_text != null) {
         const merged = rebaseNote(payload.base_text, error.detail.final_text, payload.text);
         state.finalRevision = error.detail.final_revision;
@@ -594,16 +650,34 @@ async function saveFinal(force = false) {
                 text: merged,
               }),
             });
-            applyFinalResult(id, result.final_text, result.final_revision);
-            clearSavedEditNotice(NOTE_UNSAVED_NOTICE, NOTE_UNSAVED_IDLE);
+            if (serial !== noteSaveSerial) return;
+            settleNoteSave(id, result.final_text, result.final_revision);
             return;
           } catch (retryError) {
             error = retryError;
           }
         }
       }
+      if (serial !== noteSaveSerial) return;
+      const conflictText = error.status === 409 && typeof error.detail?.final_text === "string"
+        ? error.detail.final_text
+        : null;
+      const serverText = conflictText != null ? conflictText : state.finalApplied;
+      const onThisNote = state.selectedKind === "note" && state.selectedId === id && state.note?.id === id;
+      if (onThisNote && noteFinal.value === serverText) {
+        if (conflictText != null) {
+          state.finalRevision = error.detail.final_revision;
+          state.finalBaseText = conflictText;
+          state.finalApplied = conflictText;
+        }
+        state.finalDirty = false;
+        finalState.textContent = "Saved";
+        clearSavedEditNotice(NOTE_UNSAVED_NOTICE, NOTE_UNSAVED_IDLE);
+        return;
+      }
       state.finalDirty = true;
       finalState.textContent = "Unsaved";
+      if (!onThisNote) return;
       if (state.recording) showCaptureNotice(NOTE_UNSAVED_NOTICE, 1);
       else setStatus(idleUnsavedStatus(NOTE_UNSAVED_IDLE, error));
     } finally {
@@ -737,6 +811,7 @@ function updateInspectorFields(detail, isLatest) {
       polishSave.applied = value;
       fit(inspectorPolished, 0.22);
     }
+    polishSave.accepted = value;
   }
   copyInspectorPolished.disabled = !inspectorPolished.value;
   retryInspectorPolish.hidden = !polishRetryVisible(detail);
@@ -1009,6 +1084,8 @@ async function flushSessionSave() {
   const id = state.selectedId;
   const draft = lectureDraft.value;
   const notes = listenerNotes.value;
+  const serverDraft = state.lectureApplied;
+  const serverNotes = state.notesApplied;
   const chunkIds = [...state.mergedChunks];
   let baseRevision = state.sessionRevision;
   state.sessionSavePending++;
@@ -1033,13 +1110,40 @@ async function flushSessionSave() {
       const key = `speech-draft-${id}`;
       const cached = JSON.parse(localStorage.getItem(key) || "null");
       if (cached?.text === draft && cached?.notes === notes) localStorage.removeItem(key);
-      clearSavedEditNotice(NOTES_UNSAVED_NOTICE, NOTES_UNSAVED_IDLE);
+      if (lectureSaveStillShown(id, draft, notes, saveDraft, saveNotes)) {
+        clearSavedEditNotice(NOTES_UNSAVED_NOTICE, NOTES_UNSAVED_IDLE);
+      } else if (state.selectedKind === "session" && state.selectedId === id && (state.lectureDirty || state.notesDirty)) {
+        revealStillUnsaved(NOTES_UNSAVED_NOTICE, NOTES_UNSAVED_IDLE);
+      }
     } catch (error) {
-      if (state.selectedId === id) {
-        state.lectureDirty ||= saveDraft;
-        state.notesDirty ||= saveNotes;
-        if (state.recording) showCaptureNotice(NOTES_UNSAVED_NOTICE, 1);
-        else setStatus(idleUnsavedStatus(NOTES_UNSAVED_IDLE, error));
+      if (state.selectedId === id && state.selectedKind === "session") {
+        const draftSuperseded = state.lectureApplied !== draft;
+        const notesSuperseded = state.notesApplied !== notes;
+        const conflict = error.status === 409;
+        if (saveDraft && !draftSuperseded) {
+          if (!conflict && lectureDraft.value === serverDraft) {
+            state.lectureDirty = false;
+            state.lectureApplied = serverDraft;
+          } else {
+            state.lectureDirty = true;
+          }
+        }
+        if (saveNotes && !notesSuperseded) {
+          if (!conflict && listenerNotes.value === serverNotes) {
+            state.notesDirty = false;
+            state.notesApplied = serverNotes;
+          } else {
+            state.notesDirty = true;
+          }
+        }
+        const draftMatchesServer = !saveDraft || (!draftSuperseded && !conflict && lectureDraft.value === serverDraft);
+        const notesMatchServer = !saveNotes || (!notesSuperseded && !conflict && listenerNotes.value === serverNotes);
+        if (draftMatchesServer && notesMatchServer && !state.lectureDirty && !state.notesDirty) {
+          clearSavedEditNotice(NOTES_UNSAVED_NOTICE, NOTES_UNSAVED_IDLE);
+        } else if (state.lectureDirty || state.notesDirty) {
+          if (state.recording) showCaptureNotice(NOTES_UNSAVED_NOTICE, 1);
+          else setStatus(idleUnsavedStatus(NOTES_UNSAVED_IDLE, error));
+        }
       }
       throw error;
     } finally {
@@ -2499,13 +2603,18 @@ const boot = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 channel.onmessage = () => {}; // Never close a tab holding recordings or edits.
 channel.postMessage({ type: "takeover", boot });
 
+function clearDraftStorageFullNotice() {
+  clearCaptureNotice(DRAFT_STORAGE_FULL_NOTICE);
+  if (state.recording || state.noteTakePending) return;
+  if (state.lastStatus === DRAFT_STORAGE_FULL_NOTICE) setStatus("");
+}
 function cacheLectureDraft() {
   if (!state.selectedId) return;
   try {
     localStorage.setItem(`speech-draft-${state.selectedId}`, JSON.stringify({
       text: lectureDraft.value, notes: listenerNotes.value, revision: state.sessionRevision,
     }));
-    clearCaptureNotice(DRAFT_STORAGE_FULL_NOTICE);
+    clearDraftStorageFullNotice();
   } catch (_) { setStatus(DRAFT_STORAGE_FULL_NOTICE, 2); }
 }
 function pageLeaveNeedsWarning() {

@@ -163,6 +163,11 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "noteTakePending" in status_fn
     assert "holdNoteTakeStatus" in status_fn
     assert "Local draft storage is full. Keep this tab open until saved." in javascript
+    draft_cache = javascript.split("function cacheLectureDraft", 1)[1].split("function pageLeaveNeedsWarning", 1)[0]
+    assert "clearDraftStorageFullNotice()" in draft_cache
+    draft_clear = javascript.split("function clearDraftStorageFullNotice", 1)[1].split("function cacheLectureDraft", 1)[0]
+    assert "state.lastStatus === DRAFT_STORAGE_FULL_NOTICE" in draft_clear
+    assert "state.recording || state.noteTakePending" in draft_clear
     assert "only in this tab" in javascript
     assert "unjournaledCaptures" in javascript
     assert "putCaptureRow" in javascript
@@ -359,12 +364,28 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     save_turn = javascript.split("async function saveTurn", 1)[1].split("async function ", 1)[0]
     assert "POLISH_UNSAVED_IDLE" in save_turn
     assert "error.message" not in save_turn
+    assert "save.accepted = text" in save_turn
+    assert "polishSaveStillShown(save, text)" in save_turn
+    assert "save.applied !== text" in save_turn
+    assert "inspectorPolished.value === save.accepted" in save_turn
+    assert "save.applied = save.accepted" in save_turn
+    assert "revealStillUnsaved(POLISH_UNSAVED_NOTICE, POLISH_UNSAVED_IDLE)" in save_turn
     save_final = javascript.split("async function saveFinal", 1)[1].split("async function flushFinalSave", 1)[0]
     assert "NOTE_UNSAVED_IDLE" in save_final
     assert "error.message" not in save_final
+    assert "noteSaveSerial" in save_final
+    assert "serial !== noteSaveSerial" in save_final
+    assert "settleNoteSave(id, result.final_text, result.final_revision)" in save_final
+    assert "noteFinal.value === serverText" in save_final
     save_session = javascript.split("async function flushSessionSave", 1)[1].split("async function mergeSessionChunks", 1)[0]
     assert "NOTES_UNSAVED_IDLE" in save_session
     assert "error.message" not in save_session
+    assert "serverDraft" in save_session
+    assert "lectureSaveStillShown(id, draft, notes, saveDraft, saveNotes)" in save_session
+    assert "error.status !== 409" not in save_session
+    assert "error.status === 409" in save_session
+    assert "lectureDraft.value === serverDraft" in save_session
+    assert "revealStillUnsaved(NOTES_UNSAVED_NOTICE, NOTES_UNSAVED_IDLE)" in save_session
     switch_mode = javascript.split("async function switchMode", 1)[1].split("function resetQuestionFields", 1)[0]
     assert "NOTES_UNSAVED_IDLE" in switch_mode
     assert "error.message" not in switch_mode
