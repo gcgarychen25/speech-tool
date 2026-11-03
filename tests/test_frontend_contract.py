@@ -76,9 +76,19 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "rememberAcceptedQuestion(id, text, serial)" in question_save
     assert question_save.index("rememberAcceptedQuestion(id, text, serial)") < question_save.index("questionSavedText.get(id) === questionOut.value")
     assert question_save.index("questionSavedText.get(id) === questionOut.value") < question_save.index("showQuestionSaveFailure()")
+    assert "questionAwaitingServer.add(id)" in question_save
     accepted = javascript.split("function clearAcceptedQuestionSave", 1)[1].split("function rememberAcceptedQuestion", 1)[0]
     assert "QUESTION_UNSAVED_NOTICE" in accepted
     assert "QUESTION_TAB_ONLY_NOTICE" in accepted
+    assert "QUESTION_OTHER_TAB_ONLY" in accepted
+    seed = javascript.split("function seedQuestionDraft", 1)[1].split("function queueQuestionSave", 1)[0]
+    assert "latest_question" in seed
+    assert "questionMemory.has(id)" in seed
+    assert "questionAwaitingServer.add(id)" in seed
+    assert "queueQuestionSave(id, text)" in seed
+    assert "seedQuestionDraft(detail)" in javascript.split("async function renderSession", 1)[1].split("async function sync", 1)[0]
+    assert "showQuestionRetention()" in javascript.split("async function renderSession", 1)[1].split("async function sync", 1)[0]
+    assert "A question edit is only in this tab until it saves. Keep this tab open." in javascript
     assert 'state.selectedId === id' in javascript.split("function questionSaveIsCurrent", 1)[1].split("function questionEditorShows", 1)[0]
     assert "It was not copied." in javascript
     assert "The lecture was not copied." in javascript
@@ -328,6 +338,7 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "lectureSetupHoldStatus()" in setup_fail
     open_ended = setup_fail.split("SpeechCapture.open", 1)[1].split("levels =>", 1)[0]
     assert "delete el('captureNotice').dataset.meetingCapture" in setup_fail
+    assert setup_fail.index("delete el('captureNotice').dataset.meetingCapture") < setup_fail.index("restoreQuestionRetentionIfNoticeEmpty()")
     assert open_ended.index("meetingShareEndedNotice()") < open_ended.index("state.recorder?.captureId")
     assert open_ended.index("state.recorder?.captureId") < open_ended.index("stopRecording()")
     assert "notice.dataset.meetingCapture = shareCaptureId" in open_ended

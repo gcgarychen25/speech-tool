@@ -106,17 +106,23 @@ function setStatus(text, noticePriority = -1) {
   if (state.recording && !recordingStatusIsLive(next)) {
     if (next) showCaptureNotice(next, noticePriority);
     holdRecordingStatus();
+    restoreQuestionRetentionIfNoticeEmpty();
     return;
   }
   // A note take has no browser journal. Keep the saving line until the server accepts it.
   if (state.noteTakePending && next !== NOTE_TAKE_SAVING_STATUS) {
     if (next) showCaptureNotice(next, noticePriority);
     holdNoteTakeStatus();
+    restoreQuestionRetentionIfNoticeEmpty();
     return;
   }
-  if (next === state.lastStatus) return;
+  if (next === state.lastStatus) {
+    restoreQuestionRetentionIfNoticeEmpty();
+    return;
+  }
   statusEl.textContent = next;
   state.lastStatus = next;
+  restoreQuestionRetentionIfNoticeEmpty();
 }
 function holdNoteTakeStatus() {
   if (!state.noteTakePending || state.lastStatus === NOTE_TAKE_SAVING_STATUS) return;
@@ -149,6 +155,7 @@ const RECORDING_BLOCKED_NOTICES = [
 ];
 const QUESTION_UNSAVED_NOTICE = "Question saved in this browser; server save is still pending.";
 const QUESTION_TAB_ONLY_NOTICE = "This question is only in this tab until it saves. Keep this tab open.";
+const QUESTION_OTHER_TAB_ONLY = "A question edit is only in this tab until it saves. Keep this tab open.";
 const DRAFT_STORAGE_FULL_NOTICE = "Local draft storage is full. Keep this tab open until saved.";
 const NOTE_TAKE_SAVING_STATUS = "Saving this note take. Keep this tab open until it is stored.";
 const HISTORY_DURING_NOTE_SAVE = "History could not refresh. This note take is still saving. Keep this tab open.";
@@ -253,6 +260,7 @@ function clearCaptureNotice(text) {
   if ((notice.textContent || "") !== text) return;
   notice.textContent = "";
   delete notice.dataset.priority;
+  restoreQuestionRetentionIfNoticeEmpty();
 }
 function clearIdleUnsavedStatus(base) {
   if (state.recording || state.noteTakePending) return;
@@ -356,6 +364,7 @@ function clearAudioBackupNotice() {
   if (!(notice.textContent || "").startsWith("Audio backup failed")) return;
   notice.textContent = "";
   delete notice.dataset.priority;
+  restoreQuestionRetentionIfNoticeEmpty();
 }
 function audioBackupFailureNotice(error, earlierDurable) {
   const earlier = earlierDurable
@@ -967,6 +976,7 @@ async function selectItem(kind, id) {
       kind === "note" ? "This note could not be opened." : "This lecture could not be opened.",
       error,
     ));
+    showQuestionRetention();
     return;
   }
   state.selectedKind = kind;
@@ -983,6 +993,7 @@ async function selectItem(kind, id) {
       setStatus(idleUnsavedStatus("This note is open. Its latest round could not be loaded.", error));
       applyMode();
       renderHistory();
+      showQuestionRetention();
       return;
     }
   } else {
@@ -990,6 +1001,7 @@ async function selectItem(kind, id) {
   }
   applyMode();
   renderHistory();
+  showQuestionRetention();
 }
 async function switchMode(mode) {
   if (state.recording || state.mode === mode) return;
@@ -1008,6 +1020,7 @@ async function switchMode(mode) {
     state.mode = mode;
     applyMode();
     renderHistory();
+    showQuestionRetention();
     return;
   }
   const recent = state.history.find((item) => item.kind === kind);
@@ -1029,6 +1042,7 @@ async function switchMode(mode) {
   }
   applyMode();
   renderHistory();
+  showQuestionRetention();
 }
 function resetQuestionFields() {
   stopQuestionWaiting();
@@ -1178,7 +1192,7 @@ async function renderSession(detail, seed = false) {
     courseEl.value = detail.course || "";
     listenerNotes.value = detail.listener_notes || "";
     lectureDraft.value = detail.display_text ?? detail.raw_transcript ?? "";
-    questionOut.value = localStorage.getItem(`speech-question-${detail.id}`) ?? detail.latest_question ?? "";
+    seedQuestionDraft(detail);
     stopQuestionWaiting();
     showQuestionSuggestion(detail.latest_question_suggestion);
     questionStatus("Uses your question first, or the selected note. Only transcribed audio is available.");
@@ -1210,6 +1224,7 @@ async function renderSession(detail, seed = false) {
       state.sessionRevision = cached.revision;
       setStatus("Recovered local edits. Copy them before resolving any save conflict.", 1);
     }
+    showQuestionRetention();
   }
   assignValue(lecturePolished, detail.polished_transcript || "");
   renderLectureHealth(detail);
@@ -1424,6 +1439,7 @@ async function startRecording(options = {}) {
   el('captureNotice').textContent = '';
   delete el('captureNotice').dataset.priority;
   delete el('captureNotice').dataset.meetingCapture;
+  restoreQuestionRetentionIfNoticeEmpty();
   el('audioSource').disabled = true;
   recordBtn.disabled = true;
   // Start the picker on this click, before awaiting the cross-tab lock.
@@ -1519,6 +1535,7 @@ async function startRecording(options = {}) {
     if (readyNotice.startsWith("Lecture setup failed") || readyNotice.startsWith("Note setup failed")) {
       noticeEl.textContent = "";
       delete noticeEl.dataset.priority;
+      restoreQuestionRetentionIfNoticeEmpty();
     }
   } catch (error) {
     if (state.recording && state.recordingMode === "lecture") {
@@ -1560,6 +1577,7 @@ function finishRecording(discard) {
   el('audioSource').disabled = false;
   el('audioMeters').hidden = true;
   clearLiveCaptureNotices();
+  restoreQuestionRetentionIfNoticeEmpty();
 }
 const stopRecording = () => finishRecording(false);
 const discardRecording = () => finishRecording(true);
@@ -2533,6 +2551,7 @@ newBtn.addEventListener("click", async () => {
     } catch (error) {
       setStatus(idleUnsavedStatus("A new note was not created.", error));
     }
+    showQuestionRetention();
   } else {
     try {
       await flushSessionSave();
@@ -2549,6 +2568,7 @@ newBtn.addEventListener("click", async () => {
     timerEl.textContent = "00:00";
     setStatus("");
     renderHistory();
+    showQuestionRetention();
   }
 });
 noteModeBtn.onclick = () => switchMode("note");
@@ -2643,6 +2663,88 @@ document.addEventListener("keydown", (event) => {
 const questionTimers = new Map();
 const questionSaveSerial = new Map();
 const questionSavedText = new Map();
+const questionMemory = new Map();
+const questionAwaitingServer = new Set();
+function syncQuestionUncached() {
+  state.questionUncached = questionMemory.size > 0;
+}
+function writeQuestionDraft(id, text) {
+  try {
+    localStorage.setItem(`speech-question-${id}`, text);
+    questionMemory.delete(id);
+    syncQuestionUncached();
+    return true;
+  } catch (_) {
+    questionMemory.set(id, text);
+    syncQuestionUncached();
+    return false;
+  }
+}
+function questionRetentionNotice() {
+  if (state.selectedKind === "session" && state.selectedId && questionMemory.has(state.selectedId)) {
+    return QUESTION_TAB_ONLY_NOTICE;
+  }
+  if (questionMemory.size) return QUESTION_OTHER_TAB_ONLY;
+  if (state.selectedKind === "session" && state.selectedId && questionAwaitingServer.has(state.selectedId)) {
+    return QUESTION_UNSAVED_NOTICE;
+  }
+  return "";
+}
+function restoreQuestionRetentionIfNoticeEmpty() {
+  const text = questionRetentionNotice();
+  if (!text || (state.lastStatus || "") === text) return;
+  const notice = el("captureNotice");
+  const current = notice.textContent || "";
+  if (current === text) return;
+  const priority = text === QUESTION_UNSAVED_NOTICE ? 1 : 2;
+  const questionNotice = current === QUESTION_TAB_ONLY_NOTICE
+    || current === QUESTION_UNSAVED_NOTICE
+    || current === QUESTION_OTHER_TAB_ONLY;
+  if (current && !questionNotice && Number(notice.dataset.priority || 0) >= priority) return;
+  showCaptureNotice(text, priority);
+}
+function showQuestionRetention() {
+  const text = questionRetentionNotice();
+  const notices = [QUESTION_TAB_ONLY_NOTICE, QUESTION_UNSAVED_NOTICE, QUESTION_OTHER_TAB_ONLY];
+  const priority = text === QUESTION_UNSAVED_NOTICE ? 1 : 2;
+  const currentNotice = el("captureNotice").textContent || "";
+  const status = state.lastStatus || "";
+  if (!text) {
+    if (notices.includes(currentNotice)) clearCaptureNotice(currentNotice);
+    if (notices.includes(status) && !state.recording && !state.noteTakePending) setStatus("");
+    return;
+  }
+  if (status === text || currentNotice === text) return;
+  if (state.recording || state.noteTakePending || (status && !notices.includes(status))) {
+    showCaptureNotice(text, priority);
+    return;
+  }
+  setStatus(text, priority);
+}
+function seedQuestionDraft(detail) {
+  const id = detail.id;
+  const serverText = detail.latest_question ?? "";
+  questionSavedText.set(id, serverText);
+  let draft = null;
+  if (questionMemory.has(id)) draft = questionMemory.get(id);
+  else {
+    try { draft = localStorage.getItem(`speech-question-${id}`); } catch (_) { draft = null; }
+  }
+  const text = draft == null ? serverText : draft;
+  questionOut.value = text;
+  if (text === serverText) {
+    questionAwaitingServer.delete(id);
+    if (questionMemory.get(id) === text) questionMemory.delete(id);
+    syncQuestionUncached();
+    try {
+      if (localStorage.getItem(`speech-question-${id}`) === text) localStorage.removeItem(`speech-question-${id}`);
+    } catch (_) { /* The server already has this wording. */ }
+    return;
+  }
+  // This draft never reached the server. Send the same wording again.
+  questionAwaitingServer.add(id);
+  queueQuestionSave(id, text);
+}
 function questionSaveIsCurrent(id, serial) {
   return questionSaveSerial.get(id) === serial
     && state.selectedKind === "session"
@@ -2654,58 +2756,61 @@ function questionEditorShows(id, text) {
 function clearAcceptedQuestionSave() {
   clearCaptureNotice(QUESTION_TAB_ONLY_NOTICE);
   clearCaptureNotice(QUESTION_UNSAVED_NOTICE);
+  clearCaptureNotice(QUESTION_OTHER_TAB_ONLY);
   if (state.recording || state.noteTakePending) return;
   const current = state.lastStatus || "";
-  if (current === QUESTION_TAB_ONLY_NOTICE || current === QUESTION_UNSAVED_NOTICE) setStatus("");
+  if (current === QUESTION_TAB_ONLY_NOTICE || current === QUESTION_UNSAVED_NOTICE || current === QUESTION_OTHER_TAB_ONLY) setStatus("");
 }
 function rememberAcceptedQuestion(id, text, serial) {
-  if (questionSaveIsCurrent(id, serial) || questionEditorShows(id, text)) questionSavedText.set(id, text);
-  if (!questionEditorShows(id, text)) return;
-  state.questionUncached = false;
+  const shown = questionEditorShows(id, text);
+  if (questionSaveIsCurrent(id, serial) || shown) questionSavedText.set(id, text);
+  if (questionSavedText.get(id) === text) questionAwaitingServer.delete(id);
+  if (questionMemory.get(id) === text) questionMemory.delete(id);
+  syncQuestionUncached();
+  if (!shown) return;
   clearAcceptedQuestionSave();
+  showQuestionRetention();
 }
 function showQuestionSaveFailure() {
-  if (state.questionUncached) {
-    if (state.recording) showCaptureNotice(QUESTION_TAB_ONLY_NOTICE, 2);
-    else setStatus(QUESTION_TAB_ONLY_NOTICE, 2);
-    return;
-  }
-  if (state.recording) showCaptureNotice(QUESTION_UNSAVED_NOTICE, 1);
-  else setStatus(QUESTION_UNSAVED_NOTICE);
+  const tabOnly = state.selectedKind === "session" && questionMemory.has(state.selectedId);
+  const text = tabOnly ? QUESTION_TAB_ONLY_NOTICE : QUESTION_UNSAVED_NOTICE;
+  const priority = tabOnly ? 2 : 1;
+  if (state.recording || state.noteTakePending) showCaptureNotice(text, priority);
+  else setStatus(text, priority);
 }
 questionOut.addEventListener("input", () => {
   copyQuestionBtn.disabled = !questionOut.value.trim();
   const id = state.selectedId, text = questionOut.value;
   if (!id || state.selectedKind !== "session") return;
+  writeQuestionDraft(id, text);
+  if (questionSavedText.get(id) === text) questionAwaitingServer.delete(id);
+  showQuestionRetention();
+  queueQuestionSave(id, text);
+});
+function queueQuestionSave(id, text) {
   const serial = (questionSaveSerial.get(id) || 0) + 1;
   questionSaveSerial.set(id, serial);
-  try {
-    localStorage.setItem(`speech-question-${id}`, text);
-    state.questionUncached = false;
-    clearCaptureNotice(QUESTION_TAB_ONLY_NOTICE);
-    if (!state.recording && state.lastStatus === QUESTION_TAB_ONLY_NOTICE) setStatus("");
-  } catch (_) {
-    state.questionUncached = true;
-    if (state.recording) showCaptureNotice(QUESTION_TAB_ONLY_NOTICE, 2);
-    else setStatus(QUESTION_TAB_ONLY_NOTICE, 2);
-  }
   clearTimeout(questionTimers.get(id));
-  questionTimers.set(id, setTimeout(async () => {
+  questionTimers.set(id, setTimeout(() => persistQuestionDraft(id, text, serial), 400));
+}
+async function persistQuestionDraft(id, text, serial) {
+  try {
+    await api(`/api/sessions/${id}/questions/edit`, {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify({text})});
     try {
-      await api(`/api/sessions/${id}/questions/edit`, {method: "POST",
-        headers: {"Content-Type": "application/json"}, body: JSON.stringify({text})});
       if (localStorage.getItem(`speech-question-${id}`) === text) {
         localStorage.removeItem(`speech-question-${id}`);
       }
-      // Only the text still on screen for this lecture clears the pending notice.
-      rememberAcceptedQuestion(id, text, serial);
-    } catch (_) {
-      if (!questionSaveIsCurrent(id, serial)) return;
-      if (questionSavedText.get(id) === questionOut.value) return;
-      showQuestionSaveFailure();
-    }
-  }, 400));
-});
+    } catch (_) { /* The server already has this wording. */ }
+    // Only the text still on screen for this lecture clears the pending notice.
+    rememberAcceptedQuestion(id, text, serial);
+  } catch (_) {
+    if (!questionSaveIsCurrent(id, serial)) return;
+    if (questionSavedText.get(id) === questionOut.value) return;
+    questionAwaitingServer.add(id);
+    showQuestionSaveFailure();
+  }
+}
 
 async function claimCapture() {
   state.captureLockReason = "";
