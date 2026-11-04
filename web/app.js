@@ -218,6 +218,34 @@ function keepUnsavedInsteadOfCopy(idleBase, copyClause) {
   const rest = already ? extra : `${copyClause}${extra ? ` ${extra}` : ""}`;
   setStatus(`${idleBase} ${rest}`);
 }
+function statusBesideUnsaved(message, noticePriority = 0) {
+  const kind = editorUnsavedKind();
+  if (!kind) {
+    setStatus(message, noticePriority);
+    return;
+  }
+  const idle = kind === "note" ? NOTE_UNSAVED_IDLE
+    : kind === "polish" ? POLISH_UNSAVED_IDLE
+    : NOTES_UNSAVED_IDLE;
+  // A copy result must not replace the unsaved fact. While recording, keep that
+  // notice and leave a question warning that is already on screen.
+  if (state.recording || state.noteTakePending) {
+    const live = kind === "note" ? NOTE_UNSAVED_NOTICE
+      : kind === "polish" ? POLISH_UNSAVED_NOTICE
+      : NOTES_UNSAVED_NOTICE;
+    const notice = el("captureNotice").textContent || "";
+    if (
+      notice !== QUESTION_TAB_ONLY_NOTICE
+      && notice !== QUESTION_UNSAVED_NOTICE
+      && notice !== QUESTION_OTHER_TAB_ONLY
+    ) {
+      showCaptureNotice(live, 1);
+    }
+    return;
+  }
+  const clause = String(message || "").replace(/\.+$/, "");
+  keepUnsavedInsteadOfCopy(idle, clause ? `${clause}.` : message);
+}
 function liveCaptureStatus() {
   if (state.recordingMode === "note") {
     return state.note ? `Recording round ${(state.note.turn_count || 0) + 1}` : "Recording note";
@@ -2204,23 +2232,24 @@ inspectorPolished.addEventListener("input", () => {
 });
 copyInspectorPolished.addEventListener("click", async () => {
   if (!inspectorPolished.value || !state.expandedRoundId) return;
+  const text = inspectorPolished.value;
   try {
-    await navigator.clipboard.writeText(inspectorPolished.value);
+    await navigator.clipboard.writeText(text);
   } catch (_) {
-    setStatus("This polished draft was not copied. Clipboard unavailable.", 0);
+    statusBesideUnsaved("This polished draft was not copied. Clipboard unavailable.", 0);
     return;
   }
   try {
     await api(`/api/events/${state.expandedRoundId}/copy`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: inspectorPolished.value }),
+      body: JSON.stringify({ text }),
     });
   } catch (error) {
-    setStatus(idleUnsavedStatus("Copied to the clipboard. The polished draft copy was not recorded.", error), 0);
+    statusBesideUnsaved(idleUnsavedStatus("Copied to the clipboard. The polished draft copy was not recorded.", error), 0);
     return;
   }
-  setStatus("Copied polished draft");
+  statusBesideUnsaved(inspectorPolished.value === text ? "Copied polished draft" : "The earlier polished draft was copied.");
 });
 retryInspectorPolish.addEventListener("click", async () => {
   if (!state.expandedRoundId) return;
@@ -2476,13 +2505,14 @@ draftQuestionBtn.addEventListener("click", () => {
 });
 copyQuestionBtn.addEventListener("click", async () => {
   if (!questionOut.value) return;
+  const text = questionOut.value;
   try {
-    await navigator.clipboard.writeText(questionOut.value);
+    await navigator.clipboard.writeText(text);
   } catch (_) {
-    setStatus("This question was not copied. Clipboard unavailable.", 0);
+    statusBesideUnsaved("This question was not copied. Clipboard unavailable.", 0);
     return;
   }
-  setStatus("Copied question");
+  statusBesideUnsaved(questionOut.value === text ? "Copied question" : "The earlier question text was copied.");
 });
 questionRefine.addEventListener("keydown", (event) => {
   if (event.key !== "Enter" || event.isComposing) return;
@@ -2495,13 +2525,20 @@ copyNoteBtn.addEventListener("click", async () => {
     if (noteMode) await flushFinalSave();
     else await flushSessionSave();
   } catch (_) {
-    if (!noteMode) keepUnsavedInsteadOfCopy(NOTES_UNSAVED_IDLE, "The lecture was not copied.");
+    if (!noteMode) {
+      // A failed save that already matches the stored text is not still unsaved.
+      if (state.lectureDirty || state.notesDirty || state.sessionSavePending) {
+        statusBesideUnsaved("The lecture was not copied.");
+      } else {
+        setStatus("The lecture was not copied.");
+      }
+    }
     return;
   }
   if (noteMode) {
     if (!state.selectedId) return;
     if (state.finalDirty || state.finalPending) {
-      keepUnsavedInsteadOfCopy(NOTE_UNSAVED_IDLE, "It was not copied.");
+      statusBesideUnsaved("It was not copied.");
       return;
     }
     let text = "";
@@ -2509,33 +2546,43 @@ copyNoteBtn.addEventListener("click", async () => {
       const result = await api(`/api/notes/${state.selectedId}/copy`, { method: "POST" });
       text = result.text || "";
     } catch (error) {
-      setStatus(idleUnsavedStatus("This note was not copied.", error), 0);
+      statusBesideUnsaved(idleUnsavedStatus("This note was not copied.", error), 0);
       return;
     }
     try {
       await navigator.clipboard.writeText(text);
     } catch (_) {
-      setStatus("This note was not copied. Clipboard unavailable.", 0);
+      statusBesideUnsaved("This note was not copied. Clipboard unavailable.", 0);
       return;
     }
-    setStatus("Copied note");
+    if (state.finalDirty || state.finalPending) statusBesideUnsaved("The saved note was copied.");
+    else statusBesideUnsaved("Copied note");
+    return;
+  }
+  if (state.lectureDirty || state.notesDirty || state.sessionSavePending) {
+    statusBesideUnsaved("The lecture was not copied.");
     return;
   }
   if (!lectureDraft.value || !state.selectedId) return;
+  const text = lectureDraft.value;
   try {
-    await navigator.clipboard.writeText(lectureDraft.value);
+    await navigator.clipboard.writeText(text);
   } catch (_) {
-    setStatus("This lecture was not copied. Clipboard unavailable.", 0);
+    statusBesideUnsaved("This lecture was not copied. Clipboard unavailable.", 0);
     return;
   }
   try {
     await api(`/api/sessions/${state.selectedId}/copy`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: lectureDraft.value }),
+      body: JSON.stringify({ text }),
     });
   } catch (error) {
-    setStatus(idleUnsavedStatus("Copied to the clipboard. The saved lecture copy was not updated.", error), 0);
+    statusBesideUnsaved(idleUnsavedStatus("Copied to the clipboard. The saved lecture copy was not updated.", error), 0);
+    return;
+  }
+  if (lectureDraft.value !== text || state.lectureDirty || state.notesDirty || state.sessionSavePending) {
+    statusBesideUnsaved("The saved lecture was copied.");
     return;
   }
   setStatus("Copied lecture");
@@ -2984,11 +3031,16 @@ el('copyTranscriptPath').onclick = async () => {
   try {
     const result = await api(`/api/sessions/${state.selectedId}/transcript-path`, { method: 'POST' });
     await navigator.clipboard.writeText(result.path);
-    setStatus(result.ready
+    const copied = result.ready
+      ? "Transcript path copied."
+      : "Transcript path copied. The file is empty until ASR finishes.";
+    // The path is on the clipboard. An unsaved-edit warning stays free of that path.
+    if (editorUnsavedKind()) statusBesideUnsaved(copied);
+    else setStatus(result.ready
       ? `Transcript path copied · ${result.path}`
       : `Path copied · file is empty until ASR finishes · ${result.path}`);
   } catch (error) {
-    setStatus(idleUnsavedStatus("Transcript path was not copied.", error));
+    statusBesideUnsaved(idleUnsavedStatus("Transcript path was not copied.", error));
   }
   finally { btn.disabled = false; }
 };

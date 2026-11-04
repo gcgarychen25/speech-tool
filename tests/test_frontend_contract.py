@@ -167,6 +167,13 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "idleUnsavedStatus" in javascript
     assert "safeStatusDetail" in javascript
     assert "holdRecordingStatus" in javascript
+    beside = javascript.split("function statusBesideUnsaved", 1)[1].split("function liveCaptureStatus", 1)[0]
+    assert "editorUnsavedKind" in beside
+    assert "QUESTION_TAB_ONLY_NOTICE" in beside
+    assert "QUESTION_UNSAVED_NOTICE" in beside
+    assert "QUESTION_OTHER_TAB_ONLY" in beside
+    assert "showCaptureNotice(live, 1)" in beside
+    assert "keepUnsavedInsteadOfCopy(idle, clause ? `${clause}.` : message)" in beside
     status_fn = javascript.split("function setStatus", 1)[1].split("function safeClientDetail", 1)[0]
     assert "recordingStatusIsLive" in status_fn
     assert "showCaptureNotice" in status_fn
@@ -324,8 +331,27 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "state.finalPending" in clear_note
     copy_click = javascript.split('copyNoteBtn.addEventListener("click"', 1)[1].split("newBtn.addEventListener", 1)[0]
     assert copy_click.index("state.finalDirty") < copy_click.index("/api/notes/${state.selectedId}/copy")
-    assert "keepUnsavedInsteadOfCopy(NOTE_UNSAVED_IDLE, \"It was not copied.\")" in copy_click
-    assert "keepUnsavedInsteadOfCopy(NOTES_UNSAVED_IDLE, \"The lecture was not copied.\")" in copy_click
+    assert 'statusBesideUnsaved("It was not copied.")' in copy_click
+    assert copy_click.index('statusBesideUnsaved("It was not copied.")') < copy_click.index("/api/notes/${state.selectedId}/copy")
+    assert 'setStatus("The lecture was not copied.")' in copy_click
+    assert copy_click.index("state.lectureDirty || state.notesDirty || state.sessionSavePending") < copy_click.index("The lecture was not copied.")
+    assert 'statusBesideUnsaved("Copied note")' in copy_click
+    assert 'statusBesideUnsaved("The saved note was copied.")' in copy_click
+    lecture_copy = copy_click.split('statusBesideUnsaved("Copied note")', 1)[1]
+    assert lecture_copy.index('statusBesideUnsaved("The lecture was not copied.")') < lecture_copy.index("navigator.clipboard.writeText(text)")
+    assert "lectureDraft.value !== text" in lecture_copy
+    assert lecture_copy.index("JSON.stringify({ text })") < lecture_copy.index('statusBesideUnsaved("The saved lecture was copied.")')
+    assert 'setStatus("Copied lecture")' in lecture_copy
+    question_copy = javascript.split('copyQuestionBtn.addEventListener("click"', 1)[1].split('questionRefine.addEventListener', 1)[0]
+    assert 'questionOut.value === text ? "Copied question" : "The earlier question text was copied."' in question_copy
+    polish_copy = javascript.split('copyInspectorPolished.addEventListener("click"', 1)[1].split("retryInspectorPolish.addEventListener", 1)[0]
+    assert 'inspectorPolished.value === text ? "Copied polished draft" : "The earlier polished draft was copied."' in polish_copy
+    assert "setStatus(error.message)" not in polish_copy
+    path_copy = javascript.split("el('copyTranscriptPath').onclick", 1)[1].split("async function automaticRecovery", 1)[0]
+    assert "editorUnsavedKind" in path_copy
+    assert 'statusBesideUnsaved(copied)' in path_copy
+    assert "Transcript path copied. The file is empty until ASR finishes." in path_copy
+    assert path_copy.index("if (editorUnsavedKind())") < path_copy.index("Transcript path copied · ${result.path}")
     course_change = javascript.split('courseEl.addEventListener("change"', 1)[1].split("stampBtn.addEventListener", 1)[0]
     assert "restoreCourse" in course_change
     assert "This course was not saved." in course_change
