@@ -117,6 +117,9 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "blockWhileEditorUnsaved()" in select_item
     assert select_item.index("blockWhileEditorUnsaved()") < select_item.index("await api")
     assert select_item.index("await api") < select_item.index("state.selectedId = id")
+    assert 'kind === "note" ? "This note was not opened." : "This lecture was not opened."' in select_item
+    assert "reportBlockedByLectureSave(error, clause)" in select_item
+    assert select_item.index("reportBlockedByLectureSave") < select_item.index("blockWhileEditorUnsaved()")
     assert "${safeClientDetail(error)}. Your question is unchanged." in javascript
     assert "${error.message}. Your question is unchanged." not in javascript
     assert "setStatus(error.message)" not in javascript.split("copyInspectorPolished.addEventListener", 1)[1].split("retryInspectorPolish", 1)[0]
@@ -423,8 +426,14 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "error.status === 409" in save_session
     assert "lectureDraft.value === serverDraft" in save_session
     assert "revealStillUnsaved(NOTES_UNSAVED_NOTICE, NOTES_UNSAVED_IDLE)" in save_session
+    blocked_save = javascript.split("function reportBlockedByLectureSave", 1)[1].split("function statusBesideUnsaved", 1)[0]
+    assert "lectureNotesStillUnsaved()" in blocked_save
+    assert "keepUnsavedInsteadOfCopy(NOTES_UNSAVED_IDLE, clause)" in blocked_save
+    assert "idleUnsavedStatus(clause, error)" in blocked_save
+    assert "error.message" not in blocked_save
     switch_mode = javascript.split("async function switchMode", 1)[1].split("function resetQuestionFields", 1)[0]
-    assert "NOTES_UNSAVED_IDLE" in switch_mode
+    assert 'mode === "note" ? "Notes were not opened." : "Lectures were not opened."' in switch_mode
+    assert "reportBlockedByLectureSave(error, clause)" in switch_mode
     assert "error.message" not in switch_mode
     assert "blockWhileNoteTakeSaving()" in switch_mode
     assert switch_mode.index("blockWhileNoteTakeSaving()") < switch_mode.index("await flushFinalSave()")
@@ -441,6 +450,9 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "blockWhileEditorUnsaved()" in new_note
     assert "A new note was not created." in new_note
     assert new_note.index("blockWhileEditorUnsaved()") < new_note.index("await createAndSelectNote()")
+    lecture_new = new_note.split("await flushSessionSave()", 1)[1]
+    assert 'reportBlockedByLectureSave(error, "A new lecture was not started.")' in lecture_new
+    assert lecture_new.index("A new lecture was not started.") < lecture_new.index("state.selectedId = null")
     delete_item = javascript.split("async function deleteHistoryItem", 1)[1].split("listenerNotes.addEventListener", 1)[0]
     assert delete_item.index("blockWhileNoteTakeSaving()") < delete_item.index("method: \"DELETE\"")
     assert start.index("SpeechCapture.open") < start.index("prepareRecordingTarget")

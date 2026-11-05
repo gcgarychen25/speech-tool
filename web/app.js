@@ -218,6 +218,17 @@ function keepUnsavedInsteadOfCopy(idleBase, copyClause) {
   const rest = already ? extra : `${copyClause}${extra ? ` ${extra}` : ""}`;
   setStatus(`${idleBase} ${rest}`);
 }
+function lectureNotesStillUnsaved() {
+  return Boolean(state.lectureDirty || state.notesDirty || state.sessionSavePending);
+}
+function reportBlockedByLectureSave(error, clause) {
+  // A failed save that already matches the text on screen is not still unsaved.
+  if (lectureNotesStillUnsaved()) {
+    keepUnsavedInsteadOfCopy(NOTES_UNSAVED_IDLE, clause);
+    return;
+  }
+  setStatus(idleUnsavedStatus(clause, error));
+}
 function statusBesideUnsaved(message, noticePriority = 0) {
   const kind = editorUnsavedKind();
   if (!kind) {
@@ -990,7 +1001,9 @@ async function selectItem(kind, id) {
     await flushFinalSave();
     await flushTurnSaves();
     await flushSessionSave();
-  } catch (_) {
+  } catch (error) {
+    const clause = kind === "note" ? "This note was not opened." : "This lecture was not opened.";
+    reportBlockedByLectureSave(error, clause);
     return;
   }
   if (blockWhileEditorUnsaved()) return;
@@ -1039,7 +1052,8 @@ async function switchMode(mode) {
     await flushTurnSaves();
     await flushSessionSave();
   } catch (error) {
-    setStatus(idleUnsavedStatus(NOTES_UNSAVED_IDLE, error));
+    const clause = mode === "note" ? "Notes were not opened." : "Lectures were not opened.";
+    reportBlockedByLectureSave(error, clause);
     return;
   }
   if (blockWhileEditorUnsaved()) return;
@@ -2602,7 +2616,8 @@ newBtn.addEventListener("click", async () => {
   } else {
     try {
       await flushSessionSave();
-    } catch (_) {
+    } catch (error) {
+      reportBlockedByLectureSave(error, "A new lecture was not started.");
       return;
     }
     if (blockWhileEditorUnsaved()) return;
