@@ -168,7 +168,7 @@ function editorUnsavedKind() {
   if (state.lectureDirty || state.notesDirty || state.sessionSavePending) return "lecture";
   return "";
 }
-function blockWhileEditorUnsaved() {
+function blockWhileEditorUnsaved(clause = "") {
   const kind = editorUnsavedKind();
   if (!kind) return false;
   const idle = kind === "note" ? NOTE_UNSAVED_IDLE
@@ -180,6 +180,10 @@ function blockWhileEditorUnsaved() {
   // Leave the editor in place. A failed save already includes the request detail.
   if (state.recording || state.noteTakePending) {
     showCaptureNotice(live, 1);
+    return true;
+  }
+  if (clause) {
+    keepUnsavedInsteadOfCopy(idle, clause);
     return true;
   }
   const current = state.lastStatus || "";
@@ -881,7 +885,7 @@ async function showRoundPolish(turnId) {
     await flushTurnSaves();
     // The polish box is shared. Leave the unsaved round on screen.
     if (editorUnsavedKind() === "polish") {
-      blockWhileEditorUnsaved();
+      blockWhileEditorUnsaved("This round was not opened.");
       return false;
     }
   }
@@ -997,16 +1001,16 @@ async function selectItem(kind, id) {
     return;
   }
   if (blockWhileNoteTakeSaving()) return;
+  const clause = kind === "note" ? "This note was not opened." : "This lecture was not opened.";
   try {
     await flushFinalSave();
     await flushTurnSaves();
     await flushSessionSave();
   } catch (error) {
-    const clause = kind === "note" ? "This note was not opened." : "This lecture was not opened.";
     reportBlockedByLectureSave(error, clause);
     return;
   }
-  if (blockWhileEditorUnsaved()) return;
+  if (blockWhileEditorUnsaved(clause)) return;
   let detail;
   try {
     detail = kind === "note"
@@ -1047,16 +1051,16 @@ async function selectItem(kind, id) {
 async function switchMode(mode) {
   if (state.recording || state.mode === mode) return;
   if (blockWhileNoteTakeSaving()) return;
+  const clause = mode === "note" ? "Notes were not opened." : "Lectures were not opened.";
   try {
     await flushFinalSave();
     await flushTurnSaves();
     await flushSessionSave();
   } catch (error) {
-    const clause = mode === "note" ? "Notes were not opened." : "Lectures were not opened.";
     reportBlockedByLectureSave(error, clause);
     return;
   }
-  if (blockWhileEditorUnsaved()) return;
+  if (blockWhileEditorUnsaved(clause)) return;
   const kind = mode === "note" ? "note" : "session";
   if (state.selectedKind === kind && state.selectedId) {
     state.mode = mode;
@@ -1133,10 +1137,15 @@ async function createAndSelectNote() {
 async function flushSessionSave() {
   clearTimeout(state.lectureSaveTimer);
   clearTimeout(state.notesSaveTimer);
-  if (state.selectedKind !== "session" || !state.selectedId) return state.sessionSaveChain;
+  // Wait for a save that is still running. A finished failure must not block
+  // the next open, mode switch, New, or delete once nothing is pending.
+  const waitForSessionSave = () => (
+    state.sessionSavePending ? state.sessionSaveChain : undefined
+  );
+  if (state.selectedKind !== "session" || !state.selectedId) return waitForSessionSave();
   const saveDraft = state.lectureDirty;
   const saveNotes = state.notesDirty;
-  if (!saveDraft && !saveNotes) return state.sessionSaveChain;
+  if (!saveDraft && !saveNotes) return waitForSessionSave();
   const id = state.selectedId;
   const draft = lectureDraft.value;
   const notes = listenerNotes.value;
@@ -2298,6 +2307,26 @@ async function deleteHistoryItem(kind, id) {
     return;
   }
   if (blockWhileNoteTakeSaving()) return;
+  if (state.selectedId === id && state.selectedKind === kind) {
+    const clause = kind === "note" ? "This note was not deleted." : "This lecture was not deleted.";
+    try {
+      await flushFinalSave();
+      await flushTurnSaves();
+      await flushSessionSave();
+    } catch (error) {
+      if (kind === "session") reportBlockedByLectureSave(error, clause);
+      else setStatus(idleUnsavedStatus(clause, error));
+      return;
+    }
+    if (blockWhileEditorUnsaved(clause)) return;
+    if (kind === "session") {
+      await flushOpenQuestionSave();
+      if (lectureQuestionStillUnsaved()) {
+        reportBlockedQuestion(clause);
+        return;
+      }
+    }
+  }
   const path = kind === "note" ? `/api/notes/${id}` : `/api/sessions/${id}`;
   try {
     await api(path, { method: "DELETE" });
@@ -2606,7 +2635,7 @@ newBtn.addEventListener("click", async () => {
   if (state.mode === "note") {
     await flushFinalSave();
     await flushTurnSaves();
-    if (blockWhileEditorUnsaved()) return;
+    if (blockWhileEditorUnsaved("A new note was not created.")) return;
     try {
       await createAndSelectNote();
     } catch (error) {
@@ -2620,7 +2649,7 @@ newBtn.addEventListener("click", async () => {
       reportBlockedByLectureSave(error, "A new lecture was not started.");
       return;
     }
-    if (blockWhileEditorUnsaved()) return;
+    if (blockWhileEditorUnsaved("A new lecture was not started.")) return;
     state.selectedId = null;
     state.session = null;
     listenerNotes.value = "";
@@ -2854,6 +2883,31 @@ function queueQuestionSave(id, text) {
   questionSaveSerial.set(id, serial);
   clearTimeout(questionTimers.get(id));
   questionTimers.set(id, setTimeout(() => persistQuestionDraft(id, text, serial), 400));
+}
+function lectureQuestionStillUnsaved() {
+  if (state.selectedKind !== "session" || !state.selectedId) return false;
+  const id = state.selectedId;
+  if (questionMemory.has(id) || questionAwaitingServer.has(id)) return true;
+  if (!questionSavedText.has(id)) return false;
+  return questionOut.value !== questionSavedText.get(id);
+}
+function reportBlockedQuestion(clause) {
+  const text = questionRetentionNotice();
+  if (!text) {
+    setStatus(clause);
+    return;
+  }
+  keepUnsavedInsteadOfCopy(text, clause);
+}
+async function flushOpenQuestionSave() {
+  if (state.selectedKind !== "session" || !state.selectedId) return;
+  const id = state.selectedId;
+  const text = questionOut.value;
+  if (!questionSavedText.has(id) || questionSavedText.get(id) === text) return;
+  const serial = (questionSaveSerial.get(id) || 0) + 1;
+  questionSaveSerial.set(id, serial);
+  clearTimeout(questionTimers.get(id));
+  await persistQuestionDraft(id, text, serial);
 }
 async function persistQuestionDraft(id, text, serial) {
   try {
