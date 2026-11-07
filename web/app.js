@@ -233,6 +233,22 @@ function reportBlockedByLectureSave(error, clause) {
   }
   setStatus(idleUnsavedStatus(clause, error));
 }
+function reportCourseNotSaved(error, includeDetail = false) {
+  // The course field is already back to the stored course. Call the notes
+  // unsaved only when that text is still different or a save is still running.
+  if (!lectureNotesStillUnsaved()) {
+    setStatus(idleUnsavedStatus("This course was not saved.", error), 0);
+    return;
+  }
+  const clause = includeDetail
+    ? idleUnsavedStatus("This course was not saved.", error)
+    : "This course was not saved.";
+  if (state.recording || state.noteTakePending) {
+    showCaptureNotice(`${clause} ${NOTES_UNSAVED_NOTICE}`, 1);
+    return;
+  }
+  keepUnsavedInsteadOfCopy(NOTES_UNSAVED_IDLE, clause);
+}
 function statusBesideUnsaved(message, noticePriority = 0) {
   const kind = editorUnsavedKind();
   if (!kind) {
@@ -2377,13 +2393,10 @@ courseEl.addEventListener("change", async () => {
   };
   try {
     await flushSessionSave();
-  } catch (_) {
+  } catch (error) {
     restoreCourse();
-    if (state.recording || state.noteTakePending) {
-      showCaptureNotice(`This course was not saved. ${NOTES_UNSAVED_NOTICE}`, 1);
-    } else {
-      keepUnsavedInsteadOfCopy(NOTES_UNSAVED_IDLE, "This course was not saved.");
-    }
+    // A finished save that already matches the text is not still unsaved.
+    reportCourseNotSaved(error);
     return;
   }
   if (serial !== courseSaveSerial || state.selectedId !== id) return;
@@ -2405,7 +2418,7 @@ courseEl.addEventListener("change", async () => {
     }
   } catch (error) {
     restoreCourse();
-    setStatus(idleUnsavedStatus("This course was not saved.", error), 0);
+    reportCourseNotSaved(error, true);
   }
 });
 stampBtn.addEventListener("click", () => {

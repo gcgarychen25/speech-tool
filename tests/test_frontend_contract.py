@@ -357,10 +357,17 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert path_copy.index("if (editorUnsavedKind())") < path_copy.index("Transcript path copied · ${result.path}")
     course_change = javascript.split('courseEl.addEventListener("change"', 1)[1].split("stampBtn.addEventListener", 1)[0]
     assert "restoreCourse" in course_change
-    assert "This course was not saved." in course_change
-    assert 'keepUnsavedInsteadOfCopy(NOTES_UNSAVED_IDLE, "This course was not saved.")' in course_change
-    assert "This course was not saved. ${NOTES_UNSAVED_NOTICE}" in course_change
+    assert course_change.count("reportCourseNotSaved(") == 2
+    assert "reportCourseNotSaved(error, true)" in course_change
     assert course_change.index("await flushSessionSave()") < course_change.index("course: next")
+    assert course_change.index("reportCourseNotSaved(error)") < course_change.index("course: next")
+    report_course = javascript.split("function reportCourseNotSaved", 1)[1].split("function statusBesideUnsaved", 1)[0]
+    assert "lectureNotesStillUnsaved()" in report_course
+    assert report_course.index("!lectureNotesStillUnsaved()") < report_course.index("NOTES_UNSAVED_NOTICE")
+    assert 'idleUnsavedStatus("This course was not saved.", error)' in report_course
+    assert 'keepUnsavedInsteadOfCopy(NOTES_UNSAVED_IDLE, clause)' in report_course
+    assert "`${clause} ${NOTES_UNSAVED_NOTICE}`" in report_course
+    assert "error.message" not in report_course
     assert "Lecture" in html
     start = javascript.split("async function startRecording", 1)[1]
     setup_fail = start.split("function finishRecording", 1)[0]
