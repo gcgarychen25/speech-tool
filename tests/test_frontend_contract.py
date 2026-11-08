@@ -373,8 +373,22 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     setup_fail = start.split("function finishRecording", 1)[0]
     assert "lectureSetupHoldStatus()" in setup_fail
     open_ended = setup_fail.split("SpeechCapture.open", 1)[1].split("levels =>", 1)[0]
-    assert "delete el('captureNotice').dataset.meetingCapture" in setup_fail
-    assert setup_fail.index("delete el('captureNotice').dataset.meetingCapture") < setup_fail.index("restoreQuestionRetentionIfNoticeEmpty()")
+    assert "prepareCaptureNoticeForStart()" in setup_fail
+    assert setup_fail.index("prepareCaptureNoticeForStart()") < setup_fail.index("claimCapture()")
+    prepare_start = javascript.split("function prepareCaptureNoticeForStart", 1)[1].split("function ", 1)[0]
+    assert "delete notice.dataset.meetingCapture" in prepare_start
+    assert prepare_start.index("delete notice.dataset.meetingCapture") < prepare_start.index("restoreQuestionRetentionIfNoticeEmpty()")
+    assert "idleFormOfUnsavedNotice(current)" in prepare_start
+    assert "notice.textContent = idle" in prepare_start
+    assert "showCaptureNotice" not in prepare_start
+    show_unsaved = javascript.split("function showUnsavedWhileRecording", 1)[1].split("function ", 1)[0]
+    assert "unsavedRecordingNotice()" in show_unsaved
+    assert "questionRetentionOnNotice()" in show_unsaved
+    assert "showCaptureNotice(live, 1)" in show_unsaved
+    assert setup_fail.index('setStatus(state.recordingMode === "note" ? "Recording note" : "Recording lecture")') < setup_fail.index("showUnsavedWhileRecording()")
+    assert "statusBesideUnsaved(captureBlockedMessage(false))" in setup_fail
+    assert "statusBesideUnsaved(startFailure)" in setup_fail
+    assert 'if (!editorUnsavedKind())' in setup_fail
     assert open_ended.index("meetingShareEndedNotice()") < open_ended.index("state.recorder?.captureId")
     assert open_ended.index("state.recorder?.captureId") < open_ended.index("stopRecording()")
     assert "notice.dataset.meetingCapture = shareCaptureId" in open_ended

@@ -418,6 +418,57 @@ function clearLiveCaptureNotices() {
     delete notice.dataset.priority;
   }
 }
+function idleFormOfUnsavedNotice(text) {
+  if (text === NOTE_UNSAVED_NOTICE || text === NOTE_UNSAVED_IDLE) return NOTE_UNSAVED_IDLE;
+  if (text === POLISH_UNSAVED_NOTICE || text === POLISH_UNSAVED_IDLE) return POLISH_UNSAVED_IDLE;
+  if (text === NOTES_UNSAVED_NOTICE || text === NOTES_UNSAVED_IDLE) return NOTES_UNSAVED_IDLE;
+  return "";
+}
+function unsavedRecordingNotice() {
+  const kind = editorUnsavedKind();
+  if (kind === "note") return NOTE_UNSAVED_NOTICE;
+  if (kind === "polish") return POLISH_UNSAVED_NOTICE;
+  if (kind === "lecture") return NOTES_UNSAVED_NOTICE;
+  return "";
+}
+function questionRetentionOnNotice() {
+  const current = el("captureNotice").textContent || "";
+  return current === QUESTION_TAB_ONLY_NOTICE
+    || current === QUESTION_UNSAVED_NOTICE
+    || current === QUESTION_OTHER_TAB_ONLY;
+}
+function prepareCaptureNoticeForStart() {
+  const notice = el("captureNotice");
+  const current = notice.textContent || "";
+  delete notice.dataset.meetingCapture;
+  // A new take has not started. Keep an unsaved-edit fact, without claiming recording continues.
+  const idle = idleFormOfUnsavedNotice(current);
+  if (idle) {
+    notice.textContent = idle;
+    notice.dataset.priority = "1";
+  } else {
+    notice.textContent = "";
+    delete notice.dataset.priority;
+  }
+  restoreQuestionRetentionIfNoticeEmpty();
+}
+function showUnsavedWhileRecording() {
+  if (!state.recording) return;
+  const live = unsavedRecordingNotice();
+  const notice = el("captureNotice");
+  const current = notice.textContent || "";
+  if (!live) {
+    if (idleFormOfUnsavedNotice(current)) {
+      notice.textContent = "";
+      delete notice.dataset.priority;
+      restoreQuestionRetentionIfNoticeEmpty();
+    }
+    return;
+  }
+  // A question that exists only in this tab, or is still waiting on the server, stays visible.
+  if (questionRetentionOnNotice()) return;
+  showCaptureNotice(live, 1);
+}
 function clearAudioBackupNotice() {
   const notice = el("captureNotice");
   if (!(notice.textContent || "").startsWith("Audio backup failed")) return;
@@ -1503,10 +1554,7 @@ async function startRecording(options = {}) {
   if (state.recording || state.starting) return;
   state.starting = true;
   const source = el('audioSource').value;
-  el('captureNotice').textContent = '';
-  delete el('captureNotice').dataset.priority;
-  delete el('captureNotice').dataset.meetingCapture;
-  restoreQuestionRetentionIfNoticeEmpty();
+  prepareCaptureNoticeForStart();
   el('audioSource').disabled = true;
   recordBtn.disabled = true;
   // Start the picker on this click, before awaiting the cross-tab lock.
@@ -1531,7 +1579,7 @@ async function startRecording(options = {}) {
     state.starting = false;
     el('audioSource').disabled = false;
     recordBtn.disabled = false;
-    setStatus(captureBlockedMessage(false));
+    statusBesideUnsaved(captureBlockedMessage(false));
     return;
   }
   if (options.forceLecture) {
@@ -1547,8 +1595,11 @@ async function startRecording(options = {}) {
     el('audioSource').disabled = false;
     recordBtn.disabled = false;
     const startFailure = captureStartStatus(error);
-    el('captureNotice').textContent = startFailure;
-    setStatus(startFailure);
+    if (!editorUnsavedKind()) {
+      el('captureNotice').textContent = startFailure;
+      delete el('captureNotice').dataset.priority;
+    }
+    statusBesideUnsaved(startFailure);
     return;
   }
   state.starting = false;
@@ -1579,6 +1630,7 @@ async function startRecording(options = {}) {
     }
   }, 200);
   setStatus(state.recordingMode === "note" ? "Recording note" : "Recording lecture");
+  showUnsavedWhileRecording();
   state.captureReady = prepareRecordingTarget({
     forceNew: Boolean(options.forceNew),
     courseHint: options.courseHint,
