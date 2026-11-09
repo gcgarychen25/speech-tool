@@ -156,6 +156,7 @@ const RECORDING_BLOCKED_NOTICES = [
 const QUESTION_UNSAVED_NOTICE = "Question saved in this browser; server save is still pending.";
 const QUESTION_TAB_ONLY_NOTICE = "This question is only in this tab until it saves. Keep this tab open.";
 const QUESTION_OTHER_TAB_ONLY = "A question edit is only in this tab until it saves. Keep this tab open.";
+const RECOVERED_LOCAL_EDITS = "Recovered local edits. Copy them before resolving any save conflict.";
 const DRAFT_STORAGE_FULL_NOTICE = "Local draft storage is full. Keep this tab open until saved.";
 const NOTE_TAKE_SAVING_STATUS = "Saving this note take. Keep this tab open until it is stored.";
 const HISTORY_DURING_NOTE_SAVE = "History could not refresh. This note take is still saving. Keep this tab open.";
@@ -970,7 +971,7 @@ async function showRoundPolish(turnId) {
     state.expandedRoundId = previousId;
     if (!previousId) roundInspector.classList.remove("on");
     renderRounds(state.note);
-    setStatus(idleUnsavedStatus("This round could not be opened.", error), 0);
+    statusBesideUnsaved(idleUnsavedStatus("This round could not be opened.", error), 0);
     return false;
   }
 }
@@ -1084,7 +1085,7 @@ async function selectItem(kind, id) {
       ? await api(`/api/notes/${id}`)
       : await api(`/api/sessions/${id}`);
   } catch (error) {
-    setStatus(idleUnsavedStatus(
+    statusBesideUnsaved(idleUnsavedStatus(
       kind === "note" ? "This note could not be opened." : "This lecture could not be opened.",
       error,
     ));
@@ -1102,7 +1103,7 @@ async function selectItem(kind, id) {
     try {
       await refreshInspector();
     } catch (error) {
-      setStatus(idleUnsavedStatus("This note is open. Its latest round could not be loaded.", error));
+      statusBesideUnsaved(idleUnsavedStatus("This note is open. Its latest round could not be loaded.", error));
       applyMode();
       renderHistory();
       showQuestionRetention();
@@ -1340,7 +1341,7 @@ async function renderSession(detail, seed = false) {
       state.lectureDirty = cached.text !== state.lectureApplied;
       state.notesDirty = cached.notes !== state.notesApplied;
       state.sessionRevision = cached.revision;
-      setStatus("Recovered local edits. Copy them before resolving any save conflict.", 1);
+      setStatus(RECOVERED_LOCAL_EDITS, 1);
     }
     showQuestionRetention();
   }
@@ -1470,6 +1471,47 @@ function lectureSessionTitle() {
     minute: "2-digit",
   });
 }
+function calendarSentence(message) {
+  return /[.!?]$/.test(message) ? message : `${message}.`;
+}
+function showCalendarLine(message, priority = 0) {
+  const noticeEl = el("captureNotice");
+  const noticeText = noticeEl.textContent || "";
+  const status = state.lastStatus || "";
+  // A recovered draft is more specific than the generic unsaved-notes line.
+  const recovered = status.startsWith(RECOVERED_LOCAL_EDITS)
+    ? status
+    : noticeText.startsWith(RECOVERED_LOCAL_EDITS)
+      ? noticeText
+      : "";
+  if (recovered) {
+    if (recovered.includes(message)) return;
+    const combined = `${recovered} ${calendarSentence(message)}`;
+    if (status.startsWith(RECOVERED_LOCAL_EDITS) && !state.recording && !state.noteTakePending) {
+      setStatus(combined, priority);
+    } else {
+      showCaptureNotice(combined, Math.max(priority, Number(noticeEl.dataset.priority || 0), 1));
+    }
+    return;
+  }
+  const live = (state.recording || state.noteTakePending) ? unsavedRecordingNotice() : "";
+  const keepNotice = Boolean(live) && (noticeText === live || noticeText.endsWith(` ${live}`))
+    || questionRetentionOnNotice();
+  if ((state.recording || state.noteTakePending) && keepNotice) {
+    if (noticeText.includes(message)) return;
+    showCaptureNotice(
+      `${calendarSentence(message)} ${noticeText}`,
+      Math.max(priority, Number(noticeEl.dataset.priority || 0)),
+    );
+    return;
+  }
+  if (!(state.recording || state.noteTakePending) && editorUnsavedKind()) {
+    statusBesideUnsaved(message, priority);
+    return;
+  }
+  if (state.recording || state.noteTakePending) showCaptureNotice(message, priority);
+  else setStatus(message, priority);
+}
 async function applyCalendarSuggestion(options = {}) {
   const force = Boolean(options.force);
   const fromQuery = typeof options.courseHint === "string" ? options.courseHint.trim() : "";
@@ -1482,16 +1524,13 @@ async function applyCalendarSuggestion(options = {}) {
     if (hint?.course && (force || !courseEl.value.trim())) {
       courseEl.value = hint.course;
       const courseLine = `Course from Calendar · ${hint.course}`;
-      if (state.recording) showCaptureNotice(courseLine, 0);
-      else setStatus(courseLine);
+      showCalendarLine(courseLine, 0);
     } else if (hint && hint.authorized === false && hint.detail === "calendar_access_denied") {
       const denied = "Calendar access denied. Enable Speech Tool under System Settings → Privacy & Security → Calendars.";
-      if (state.recording) showCaptureNotice(denied, 1);
-      else setStatus(denied);
+      showCalendarLine(denied, 1);
     } else if (hint && hint.detail === "calendar_helper_missing") {
       const missing = "Calendar helper not installed. Re-run install-desktop.py --install after building calendar-current.";
-      if (state.recording) showCaptureNotice(missing, 1);
-      else setStatus(missing);
+      showCalendarLine(missing, 1);
     }
     return hint;
   } catch (_) {
@@ -1837,6 +1876,11 @@ function publicCleanupDetail(detail) {
   if (!text.startsWith("AI cleanup") || text.length > 180 || /[\\/]/.test(text)) return "";
   return text.replace(/[.]+$/, "");
 }
+function cleanupNotesClause() {
+  // Cleanup never writes the notes box. Say so without calling a dirty box unchanged.
+  if (state.notesDirty) return "Saved notes are unchanged. The notes on screen are still unsaved.";
+  return "Your saved notes are unchanged.";
+}
 function cleanupPausePhrase(seconds) {
   const remaining = Math.max(0, Number(seconds) || 0);
   if (remaining >= 90) return `about ${Math.ceil(remaining / 60)} min`;
@@ -1959,11 +2003,12 @@ function renderLectureHealth(detail) {
   el('retryTranscription').hidden = !failed;
   el('retryCleanup').hidden = !cleanup;
   el('copyTranscriptPath').hidden = !(detail.chunk_count > 0);
+  const notesClause = cleanupNotesClause();
   el('cleanupSummary').textContent = providerPause
-    ? `Cleanup is paused for ${cleanupPausePhrase(cooldown)} after repeated provider failures. Original transcript text stays available. Retry cleanup tries again now. Your notes are unchanged.`
+    ? `Cleanup is paused for ${cleanupPausePhrase(cooldown)} after repeated provider failures. Original transcript text stays available. Retry cleanup tries again now. ${notesClause}`
     : guardOnly
-      ? `Original transcript kept where cleanup changed the language or removed too much.${providerDown ? ` Automatic cleanup is paused for ${cleanupPausePhrase(cooldown)}.` : ''} Your saved notes are unchanged.`
-      : cleanup ? 'Uses original text where cleanup failed or changed the language. Your saved notes are unchanged.'
+      ? `Original transcript kept where cleanup changed the language or removed too much.${providerDown ? ` Automatic cleanup is paused for ${cleanupPausePhrase(cooldown)}.` : ''} ${notesClause}`
+      : cleanup ? `Uses original text where cleanup failed or changed the language. ${notesClause}`
       : 'Optional cleanup. Original text is used for parts still processing.';
 }
 function rememberStoppedLecture(sessionId, expected) {
@@ -2307,7 +2352,7 @@ async function clearContinuousNote() {
   await saveFinal(true);
   // An empty box is not cleared until that text is stored.
   if (noteFinal.value || state.finalDirty || state.finalPending) return;
-  setStatus("Cleared");
+  statusBesideUnsaved("Cleared");
 }
 clearNoteBtn.addEventListener("click", () => {
   clearContinuousNote();
@@ -2347,11 +2392,11 @@ retryInspectorPolish.addEventListener("click", async () => {
   retryInspectorPolish.disabled = true;
   try {
     await api(`/api/events/${state.expandedRoundId}/retry-polish`, { method: "POST" });
-    setStatus("Retrying polish");
+    statusBesideUnsaved("Retrying polish");
     await refreshInspector();
     await sync();
   } catch (error) {
-    setStatus(idleUnsavedStatus("Cleanup retry did not start. The original transcript remains.", error));
+    statusBesideUnsaved(idleUnsavedStatus("Cleanup retry did not start. The original transcript remains.", error));
   } finally {
     retryInspectorPolish.disabled = false;
   }
@@ -2361,10 +2406,10 @@ retryLecturePolish.addEventListener("click", async () => {
   retryLecturePolish.disabled = true;
   try {
     await api(`/api/sessions/${state.selectedId}/retry-polish`, { method: "POST" });
-    setStatus("Retrying lecture polish");
+    statusBesideUnsaved("Retrying lecture polish");
     await sync();
   } catch (error) {
-    setStatus(idleUnsavedStatus("Cleanup retry did not start. The original transcript remains.", error));
+    statusBesideUnsaved(idleUnsavedStatus("Cleanup retry did not start. The original transcript remains.", error));
   } finally {
     retryLecturePolish.disabled = false;
   }
@@ -2383,7 +2428,7 @@ async function deleteHistoryItem(kind, id) {
       await flushSessionSave();
     } catch (error) {
       if (kind === "session") reportBlockedByLectureSave(error, clause);
-      else setStatus(idleUnsavedStatus(clause, error));
+      else statusBesideUnsaved(idleUnsavedStatus(clause, error));
       return;
     }
     if (blockWhileEditorUnsaved(clause)) return;
@@ -2402,7 +2447,7 @@ async function deleteHistoryItem(kind, id) {
     const base = kind === "note"
       ? "This note could not be deleted. It is still in the list."
       : "This lecture could not be deleted. It is still in the list.";
-    setStatus(idleUnsavedStatus(base, error));
+    statusBesideUnsaved(idleUnsavedStatus(base, error));
     return;
   }
   if (state.selectedId === id) {
@@ -2632,13 +2677,14 @@ copyNoteBtn.addEventListener("click", async () => {
   try {
     if (noteMode) await flushFinalSave();
     else await flushSessionSave();
-  } catch (_) {
+  } catch (error) {
     if (!noteMode) {
       // A failed save that already matches the stored text is not still unsaved.
+      // That path has already cleared the unsaved line, so keep the request detail here.
       if (state.lectureDirty || state.notesDirty || state.sessionSavePending) {
         statusBesideUnsaved("The lecture was not copied.");
       } else {
-        setStatus("The lecture was not copied.");
+        setStatus(idleUnsavedStatus("The lecture was not copied.", error));
       }
     }
     return;
@@ -2704,7 +2750,7 @@ newBtn.addEventListener("click", async () => {
     try {
       await createAndSelectNote();
     } catch (error) {
-      setStatus(idleUnsavedStatus("A new note was not created.", error));
+      statusBesideUnsaved(idleUnsavedStatus("A new note was not created.", error));
     }
     showQuestionRetention();
   } else {
@@ -3154,7 +3200,7 @@ el('retryTranscription').onclick = async () => {
     await api(`/api/sessions/${state.selectedId}/retry-transcription`, {method:'POST'});
     await sync();
   } catch (error) {
-    setStatus(idleUnsavedStatus("Transcription retry did not start. Saved audio remains.", error));
+    statusBesideUnsaved(idleUnsavedStatus("Transcription retry did not start. Saved audio remains.", error));
   }
   finally { el('retryTranscription').disabled = false; }
 };

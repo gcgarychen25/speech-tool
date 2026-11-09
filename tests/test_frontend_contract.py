@@ -64,6 +64,23 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "cleanup results need retry" in javascript
     assert "Cleanup retry did not start. The original transcript remains." in javascript
     assert "Transcription retry did not start. Saved audio remains." in javascript
+    assert 'statusBesideUnsaved("Retrying polish")' in javascript
+    assert 'statusBesideUnsaved("Retrying lecture polish")' in javascript
+    assert 'setStatus("Retrying polish")' not in javascript
+    assert 'setStatus("Retrying lecture polish")' not in javascript
+    assert "Your notes are unchanged." not in javascript
+    notes_clause = javascript.split("function cleanupNotesClause", 1)[1].split("function ", 1)[0]
+    assert "state.notesDirty" in notes_clause
+    assert "The notes on screen are still unsaved." in notes_clause
+    assert "Your saved notes are unchanged." in notes_clause
+    calendar_line = javascript.split("function showCalendarLine", 1)[1].split("async function applyCalendarSuggestion", 1)[0]
+    assert "RECOVERED_LOCAL_EDITS" in calendar_line
+    assert "unsavedRecordingNotice()" in calendar_line
+    assert "questionRetentionOnNotice()" in calendar_line
+    assert "statusBesideUnsaved(message, priority)" in calendar_line
+    assert "showCalendarLine(courseLine, 0)" in javascript
+    assert "showCalendarLine(denied, 1)" in javascript
+    assert "showCalendarLine(missing, 1)" in javascript
     assert "Transcript path was not copied." in javascript
     assert "This polished draft was not copied. Clipboard unavailable." in javascript
     assert "Copied to the clipboard. The polished draft copy was not recorded." in javascript
@@ -329,14 +346,14 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert ">Clear</button>" in html
     assert "clearContinuousNote" in javascript
     clear_note = javascript.split("async function clearContinuousNote", 1)[1].split("clearNoteBtn.addEventListener", 1)[0]
-    assert 'setStatus("Cleared")' in clear_note
-    assert clear_note.index("state.finalDirty") < clear_note.index('setStatus("Cleared")')
+    assert 'statusBesideUnsaved("Cleared")' in clear_note
+    assert clear_note.index("state.finalDirty") < clear_note.index('statusBesideUnsaved("Cleared")')
     assert "state.finalPending" in clear_note
     copy_click = javascript.split('copyNoteBtn.addEventListener("click"', 1)[1].split("newBtn.addEventListener", 1)[0]
     assert copy_click.index("state.finalDirty") < copy_click.index("/api/notes/${state.selectedId}/copy")
     assert 'statusBesideUnsaved("It was not copied.")' in copy_click
     assert copy_click.index('statusBesideUnsaved("It was not copied.")') < copy_click.index("/api/notes/${state.selectedId}/copy")
-    assert 'setStatus("The lecture was not copied.")' in copy_click
+    assert 'setStatus(idleUnsavedStatus("The lecture was not copied.", error))' in copy_click
     assert copy_click.index("state.lectureDirty || state.notesDirty || state.sessionSavePending") < copy_click.index("The lecture was not copied.")
     assert 'statusBesideUnsaved("Copied note")' in copy_click
     assert 'statusBesideUnsaved("The saved note was copied.")' in copy_click
@@ -465,7 +482,7 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     round_polish = javascript.split("async function showRoundPolish", 1)[1].split("async function selectRound", 1)[0]
     assert 'editorUnsavedKind() === "polish"' in round_polish
     assert 'blockWhileEditorUnsaved("This round was not opened.")' in round_polish
-    assert "This round could not be opened." in round_polish
+    assert 'statusBesideUnsaved(idleUnsavedStatus("This round could not be opened.", error), 0)' in round_polish
     assert "previousId" in round_polish
     select_round = javascript.split("async function selectRound", 1)[1].split("async function refreshInspector", 1)[0]
     assert select_round.index("await showRoundPolish(turnId)") < select_round.index("state.pinnedRoundId")
@@ -485,6 +502,8 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert delete_item.index("blockWhileEditorUnsaved(clause)") < delete_item.index("method: \"DELETE\"")
     assert delete_item.index("await flushOpenQuestionSave()") < delete_item.index("method: \"DELETE\"")
     assert "lectureQuestionStillUnsaved()" in delete_item
+    assert 'statusBesideUnsaved(idleUnsavedStatus(base, error))' in delete_item
+    assert 'statusBesideUnsaved(idleUnsavedStatus(clause, error))' in delete_item
     assert "reportBlockedQuestion(clause)" in delete_item
     assert start.index("SpeechCapture.open") < start.index("prepareRecordingTarget")
     assert "forceNew" in javascript
