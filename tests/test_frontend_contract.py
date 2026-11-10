@@ -194,6 +194,8 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "QUESTION_OTHER_TAB_ONLY" in beside
     assert "showCaptureNotice(live, 1)" in beside
     assert "keepUnsavedInsteadOfCopy(idle, clause ? `${clause}.` : message)" in beside
+    assert "if (replace)" in beside
+    assert "setStatus(clause ? `${idle} ${clause}.` : idle, noticePriority)" in beside
     status_fn = javascript.split("function setStatus", 1)[1].split("function safeClientDetail", 1)[0]
     assert "recordingStatusIsLive" in status_fn
     assert "showCaptureNotice" in status_fn
@@ -246,6 +248,17 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "Recovery needs attention." in attention
     assert "Recovery needs attention: ${reason}." in attention
     assert "Try Recover audio again before closing this tab." in recover
+    assert "statusBesideUnsaved(lectureEndPendingStatus(" in recover
+    assert "statusBesideUnsaved(captureBlockedMessage(true), 0, true)" in recover
+    assert "statusBesideUnsaved(reason" in recover
+    assert 'setStatus(lectureEndPendingStatus(' not in recover
+    question_failure = javascript.split("function showQuestionSaveFailure", 1)[1].split("function queueQuestionSave", 1)[0]
+    assert "statusHasUnsaved(status)" in question_failure
+    assert "statusHasUnsaved(notice)" in question_failure
+    assert "showQuestionRetention()" in question_failure
+    assert "statusHasUnsaved(notice)) showCaptureNotice(text, priority)" in question_failure
+    assert question_failure.index("statusHasUnsaved(status)") < question_failure.index("showCaptureNotice(text, priority)")
+    assert question_failure.index("statusHasUnsaved(notice)") < question_failure.index("setStatus(text, priority)")
     assert "failedMemory" in recover
     assert "recoveryAttentionStatus" in recover
     assert "These parts are only in this tab." in javascript

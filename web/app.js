@@ -250,7 +250,7 @@ function reportCourseNotSaved(error, includeDetail = false) {
   }
   keepUnsavedInsteadOfCopy(NOTES_UNSAVED_IDLE, clause);
 }
-function statusBesideUnsaved(message, noticePriority = 0) {
+function statusBesideUnsaved(message, noticePriority = 0, replace = false) {
   const kind = editorUnsavedKind();
   if (!kind) {
     setStatus(message, noticePriority);
@@ -276,6 +276,11 @@ function statusBesideUnsaved(message, noticePriority = 0) {
     return;
   }
   const clause = String(message || "").replace(/\.+$/, "");
+  // A repeated result, such as automatic recovery, replaces the previous one.
+  if (replace) {
+    setStatus(clause ? `${idle} ${clause}.` : idle, noticePriority);
+    return;
+  }
   keepUnsavedInsteadOfCopy(idle, clause ? `${clause}.` : message);
 }
 function liveCaptureStatus() {
@@ -2973,12 +2978,43 @@ function rememberAcceptedQuestion(id, text, serial) {
   clearAcceptedQuestionSave();
   showQuestionRetention();
 }
+function statusHasUnsaved(text) {
+  return [
+    NOTE_UNSAVED_IDLE,
+    POLISH_UNSAVED_IDLE,
+    NOTES_UNSAVED_IDLE,
+    NOTE_UNSAVED_NOTICE,
+    POLISH_UNSAVED_NOTICE,
+    NOTES_UNSAVED_NOTICE,
+  ].some((base) => text === base || text.startsWith(`${base} `));
+}
 function showQuestionSaveFailure() {
-  const tabOnly = state.selectedKind === "session" && questionMemory.has(state.selectedId);
-  const text = tabOnly ? QUESTION_TAB_ONLY_NOTICE : QUESTION_UNSAVED_NOTICE;
-  const priority = tabOnly ? 2 : 1;
-  if (state.recording || state.noteTakePending) showCaptureNotice(text, priority);
-  else setStatus(text, priority);
+  const text = questionRetentionNotice();
+  if (!text) {
+    showQuestionRetention();
+    return;
+  }
+  const priority = text === QUESTION_UNSAVED_NOTICE ? 1 : 2;
+  const status = state.lastStatus || "";
+  const notice = el("captureNotice").textContent || "";
+  if (state.recording || state.noteTakePending) {
+    showQuestionRetention();
+    return;
+  }
+  // The unsaved edit stays where it already is. The question warning takes the other line.
+  if (statusHasUnsaved(status)) {
+    const questionNotice = notice === QUESTION_TAB_ONLY_NOTICE
+      || notice === QUESTION_UNSAVED_NOTICE
+      || notice === QUESTION_OTHER_TAB_ONLY;
+    // A duplicate unsaved line can give way. A backup or setup warning stays.
+    if (!notice || questionNotice || statusHasUnsaved(notice)) showCaptureNotice(text, priority);
+    return;
+  }
+  if (statusHasUnsaved(notice)) {
+    setStatus(text, priority);
+    return;
+  }
+  showQuestionRetention();
 }
 questionOut.addEventListener("input", () => {
   copyQuestionBtn.disabled = !questionOut.value.trim();
@@ -3130,7 +3166,10 @@ function downloadedRecoverySuffix(downloaded, downloadedMemory) {
 async function recoverSavedAudio(manual = false) {
   if (recoveryBusy) return;
   if (state.recording) { setStatus("Stop recording before recovering audio."); return; }
-  if (manual && !await claimCapture()) { setStatus(captureBlockedMessage(true)); return; }
+  if (manual && !await claimCapture()) {
+    statusBesideUnsaved(captureBlockedMessage(true), 0, true);
+    return;
+  }
   recoveryBusy = true;
   let recovered = 0, failed = 0, failedMemory = 0, downloaded = 0, downloadedMemory = 0;
   let lastFailureDetail = "";
@@ -3168,26 +3207,26 @@ async function recoverSavedAudio(manual = false) {
     const waiting = recoveryStillWaitingClause(failed, failedMemory);
     if (recovered) {
       const head = `${recovered} recording part${recovered === 1 ? '' : 's'} recovered to the original lecture.`;
-      setStatus(lectureEndPendingStatus(
+      statusBesideUnsaved(lectureEndPendingStatus(
         `${waiting ? `${head} ${waiting}` : head}${downloadedClause}`,
         endPending,
-      ));
+      ), 0, true);
     } else if (downloaded) {
-      setStatus(lectureEndPendingStatus(
+      statusBesideUnsaved(lectureEndPendingStatus(
         `${downloadedRecoverySuffix(downloaded, downloadedMemory).trim()}${waiting ? ` ${waiting}` : ""}`,
         endPending,
-      ));
+      ), 0, true);
     } else if (manual && failed) {
-      setStatus(lectureEndPendingStatus(recoveryAttentionStatus(failed, failedMemory, lastFailureDetail), endPending));
+      statusBesideUnsaved(lectureEndPendingStatus(recoveryAttentionStatus(failed, failedMemory, lastFailureDetail), endPending), 0, true);
     } else if (manual && endPending) {
-      setStatus(lectureEndPendingStatus("Saved audio stays on the server.", endPending));
+      statusBesideUnsaved(lectureEndPendingStatus("Saved audio stays on the server.", endPending), 0, true);
     }
     await sync();
   } catch (error) {
     const reason = captureFailureReason(error);
-    setStatus(reason
+    statusBesideUnsaved(reason
       ? `Recovery needs attention: ${reason}. Try Recover audio again before closing this tab.`
-      : "Recovery needs attention. Try Recover audio again before closing this tab.");
+      : "Recovery needs attention. Try Recover audio again before closing this tab.", 0, true);
   }
   finally { recoveryBusy = false; if (manual) state.releaseCaptureLock?.(); await refreshRecoveryStatus(); }
 }
