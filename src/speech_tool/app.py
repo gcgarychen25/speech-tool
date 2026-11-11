@@ -305,8 +305,12 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
         turns = [store.get(event_id) for event_id in note.turn_ids]
         duration = sum(event.duration_seconds or 0 for event in turns)
         cleanup_failed = cleanup_guard = cleanup_provider_failed = 0
+        speech_polish_open = False
         for event in turns:
             raw = store.read_raw_transcript(event.id) or ""
+            # A silent round is not waiting on optional cleanup.
+            if not raw.strip():
+                continue
             cleaned = store.current_polished_transcript(event.id) or ""
             issue = polish_quality_issue(raw, cleaned) if cleaned else None
             cleanup_failed += int(event.polish_status == "failed" or bool(issue))
@@ -319,15 +323,15 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
                 cleanup_guard += 1
             elif provider_failed:
                 cleanup_provider_failed += 1
+            if event.polish_status in {"pending", "running"}:
+                speech_polish_open = True
         if not turns:
             note_state = "empty"
         elif any(event.asr_status == "failed" for event in turns):
             note_state = "transcription_failed"
         elif any(event.asr_status != "completed" for event in turns):
             note_state = "transcribing"
-        elif any(
-            event.polish_status in {"pending", "running"} for event in turns
-        ):
+        elif speech_polish_open:
             note_state = "polishing"
         elif cleanup_failed:
             note_state = "polishing_failed"
@@ -385,23 +389,29 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             event = store.get(event_id)
             chunks.append(event)
             raw = store.read_raw_transcript(event.id) or ''
-            cleaned = store.current_polished_transcript(event.id) or ''
-            issue = polish_quality_issue(raw, cleaned) if cleaned else None
-            transcribed += int(event.asr_status == 'completed' and bool(raw.strip()))
-            empty_transcript += int(event.asr_status == 'completed' and not raw.strip())
+            heard = bool(raw.strip())
+            cleaned = store.current_polished_transcript(event.id) or '' if heard else ''
+            issue = polish_quality_issue(raw, cleaned) if heard and cleaned else None
+            transcribed += int(event.asr_status == 'completed' and heard)
+            empty_transcript += int(event.asr_status == 'completed' and not heard)
             transcription_pending += int(event.asr_status in {'pending', 'running'})
             asr_failed += int(event.asr_status == 'failed')
-            cleanup_failed += int(event.polish_status == 'failed' or bool(issue))
-            guarded = event.lm_version == 'quality_rejected' or bool(issue)
-            provider_failed = (
-                event.polish_status == 'failed'
-                and event.lm_version in PROVIDER_POLISH_FAILURES
-            )
-            if guarded:
-                cleanup_guard += 1
-            elif provider_failed:
-                cleanup_provider_failed += 1
-            cleanup_pending += int(event.asr_status == 'completed' and event.polish_status in {'pending', 'running'})
+            # Silence is a capture result. It does not count as cleanup work.
+            if heard:
+                cleanup_failed += int(event.polish_status == 'failed' or bool(issue))
+                guarded = event.lm_version == 'quality_rejected' or bool(issue)
+                provider_failed = (
+                    event.polish_status == 'failed'
+                    and event.lm_version in PROVIDER_POLISH_FAILURES
+                )
+                if guarded:
+                    cleanup_guard += 1
+                elif provider_failed:
+                    cleanup_provider_failed += 1
+                cleanup_pending += int(
+                    event.asr_status == 'completed'
+                    and event.polish_status in {'pending', 'running'}
+                )
             if event.chunk_index is not None and 0 <= event.chunk_index < 10000:
                 indices.append(event.chunk_index)
             if include_text:

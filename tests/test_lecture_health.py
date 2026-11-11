@@ -45,6 +45,19 @@ def test_empty_completed_audio_is_not_pending_transcription(tmp_path):
     assert result['empty_transcript_chunks'] == 1
     assert result['transcription_pending_chunks'] == 0
     assert result['transcribed_chunks'] == 0
+    assert result['cleanup_pending_chunks'] == 0
+    assert result['cleanup_failed_chunks'] == 0
+    silent = add_chunk(store, session, 1, '   ')
+    store.update_event(silent.id, lambda e: (
+        setattr(e, 'polish_status', 'failed'),
+        setattr(e, 'lm_version', 'provider_unavailable'),
+    ))
+    pipe._polish_cooldown_until = time.monotonic() + 90
+    paused = client.get(f'/api/sessions/{session.id}').json()
+    assert paused['empty_transcript_chunks'] == 2
+    assert paused['cleanup_failed_chunks'] == 0
+    assert paused['cleanup_provider_failed_chunks'] == 0
+    assert paused['polish_skipped'] is False
 
 
 def test_gap_trailing_gap_next_index_and_saved_raw(tmp_path):
@@ -204,6 +217,17 @@ def _note_turn(store, note, raw, **updates):
     if updates:
         store.update_event(event.id, lambda e: [setattr(e, key, value) for key, value in updates.items()])
     return event
+
+
+def test_silent_note_round_is_not_a_cleanup_failure(tmp_path):
+    store, _pipe, client = setup(tmp_path)
+    note = store.create_note('Silent round')
+    _note_turn(store, note, '   ', polish_status='failed', lm_version='provider_unavailable')
+    view = client.get(f'/api/notes/{note.id}').json()
+    assert view['state'] == 'completed'
+    assert view['cleanup_failed_turns'] == 0
+    assert view['cleanup_provider_failed_turns'] == 0
+    assert view['cleanup_guard_turns'] == 0
 
 
 def test_note_history_labels_original_kept_separately_from_provider_failure(tmp_path):

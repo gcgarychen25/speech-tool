@@ -161,6 +161,15 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     turn = javascript.split("function turnStatus", 1)[1].split("function ", 1)[0]
     assert "polish skipped" not in turn
     assert "transcript saved · cleaning up" in turn
+    assert turn.index("!turnHasSpeech(turn)") < turn.index("quality_rejected")
+    assert 'return "no detected speech"' in turn
+    pause = javascript.split("function noteCleanupPause", 1)[1].split("function ", 1)[0]
+    assert "!turnHasSpeech(detail)" in pause
+    assert 'placeholder = detail.asr_status !== "completed"' in javascript
+    assert '"No detected speech."' in javascript
+    summary = javascript.split("el('cleanupSummary').textContent", 1)[1].split("function rememberStoppedLecture", 1)[0]
+    assert summary.index("detail.cleanup_pending_chunks") < summary.index("parts still processing.")
+    assert "Optional cleanup. Original text stays available." in summary
     assert "transcript saved · cleanup needs retry" in turn
     chunk = javascript.split("async function saveLectureChunk", 1)[1].split("async function ", 1)[0]
     assert chunk.index("continueLectureCapture") < chunk.index("await state.captureReady")

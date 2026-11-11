@@ -543,9 +543,13 @@ async function api(url, options) {
   }
   return body;
 }
+function turnHasSpeech(turn) {
+  return Boolean((turn.raw_transcript || turn.preview || "").trim());
+}
 function turnStatus(turn) {
   if (turn.asr_status === "failed") return "transcription failed";
   if (turn.asr_status !== "completed") return "transcribing";
+  if (!turnHasSpeech(turn)) return "no detected speech";
   if (turn.lm_version === "quality_rejected") return "transcript saved · original kept";
   if (turn.polish_status === "failed") {
     return turn.lm_version === "provider_unavailable" || turn.lm_version === "model_unavailable"
@@ -925,7 +929,9 @@ function updateInspectorFields(detail, isLatest) {
   inspectorPolished.disabled = detail.polished_draft == null;
   inspectorPolished.placeholder = detail.asr_status !== "completed"
     ? "Waiting for ASR…"
-    : (["pending", "running"].includes(detail.polish_status) ? "Polishing…"
+    : !turnHasSpeech(detail)
+      ? "No detected speech."
+      : (["pending", "running"].includes(detail.polish_status) ? "Polishing…"
       : polishRetryVisible(detail) && !detail.polished_draft
         ? "Original transcript kept. Cleanup did not replace it."
         : "No transcript yet");
@@ -942,6 +948,7 @@ function updateInspectorFields(detail, isLatest) {
   retryInspectorPolish.hidden = !polishRetryVisible(detail);
 }
 function noteCleanupPause(detail) {
+  if (detail.asr_status === "completed" && !turnHasSpeech(detail)) return "";
   const note = state.note || {};
   const cooldown = Math.max(0, Number(note.cleanup_cooldown_seconds) || 0);
   const providerDown = note.cleanup_provider_available === false || cooldown > 0;
@@ -2014,7 +2021,9 @@ function renderLectureHealth(detail) {
     : guardOnly
       ? `Original transcript kept where cleanup changed the language or removed too much.${providerDown ? ` Automatic cleanup is paused for ${cleanupPausePhrase(cooldown)}.` : ''} ${notesClause}`
       : cleanup ? `Uses original text where cleanup failed or changed the language. ${notesClause}`
-      : 'Optional cleanup. Original text is used for parts still processing.';
+      : detail.cleanup_pending_chunks
+        ? "Optional cleanup. Original text is used for parts still processing."
+        : "Optional cleanup. Original text stays available.";
 }
 function rememberStoppedLecture(sessionId, expected) {
   localStorage.setItem(`speech-stop-${sessionId}`, JSON.stringify({expected_chunk_count: expected}));

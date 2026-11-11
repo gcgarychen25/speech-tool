@@ -410,6 +410,19 @@ class Pipeline:
             raw = self.store.read_raw_transcript(event_id)
             if raw is None:
                 return
+            if not raw.strip():
+                # No speech was detected. Do not call the provider or record a
+                # cleanup failure, including while automatic cleanup is paused.
+                self.store.write_polished_transcript(event_id, "")
+                self._update_event(
+                    event_id,
+                    polish_status="completed",
+                    polished_revision=revision,
+                    lm_model="none",
+                    lm_version="no_speech",
+                    last_error=None,
+                )
+                return
             timeout = (
                 LECTURE_POLISH_TIMEOUT_SECONDS
                 if event.kind == "lecture_chunk"
