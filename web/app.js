@@ -621,6 +621,12 @@ function itemStatus(item) {
     return "transcript saved · cleaning up";
   }
   if (item.polish_skipped) return "transcript saved · cleanup unfinished";
+  // A note that never captured speech is not a finished transcript.
+  if (
+    item.state === "completed"
+    && item.turn_count
+    && item.empty_transcript_turns === item.turn_count
+  ) return "no detected speech";
   return "ready";
 }
 function historyMetaIsSerious(item, status) {
@@ -1973,7 +1979,11 @@ function renderLectureHealth(detail) {
     : cleanup ? 'Transcript saved · AI cleanup unfinished'
     : detail.cleanup_pending_chunks ? 'Transcript saved · cleaning up'
     : 'Transcript saved';
-  const parts = [`${detail.chunk_count || 0} parts uploaded`, `${detail.transcribed_chunks ?? detail.chunk_count ?? 0} transcribed`];
+  const uploaded = detail.chunk_count || 0;
+  const parts = [
+    `${uploaded} part${uploaded === 1 ? "" : "s"} uploaded`,
+    `${detail.transcribed_chunks ?? detail.chunk_count ?? 0} transcribed`,
+  ];
   if (detail.transcription_pending_chunks) {
     const pendingAsr = detail.transcription_pending_chunks;
     parts.push(`${pendingAsr} part${pendingAsr === 1 ? '' : 's'} still transcribing`);
@@ -2016,6 +2026,7 @@ function renderLectureHealth(detail) {
   el('retryCleanup').hidden = !cleanup;
   el('copyTranscriptPath').hidden = !(detail.chunk_count > 0);
   const notesClause = cleanupNotesClause();
+  const onlySilence = Boolean(detail.chunk_count) && detail.empty_transcript_chunks === detail.chunk_count;
   el('cleanupSummary').textContent = providerPause
     ? `Cleanup is paused for ${cleanupPausePhrase(cooldown)} after repeated provider failures. Original transcript text stays available. Retry cleanup tries again now. ${notesClause}`
     : guardOnly
@@ -2023,7 +2034,9 @@ function renderLectureHealth(detail) {
       : cleanup ? `Uses original text where cleanup failed or changed the language. ${notesClause}`
       : detail.cleanup_pending_chunks
         ? "Optional cleanup. Original text is used for parts still processing."
-        : "Optional cleanup. Original text stays available.";
+        : onlySilence
+          ? "No speech was detected, so there is nothing to clean up."
+          : "Optional cleanup. Original text stays available.";
 }
 function rememberStoppedLecture(sessionId, expected) {
   localStorage.setItem(`speech-stop-${sessionId}`, JSON.stringify({expected_chunk_count: expected}));

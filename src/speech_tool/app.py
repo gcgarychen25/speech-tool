@@ -127,6 +127,7 @@ class NoteView(BaseModel):
     cleanup_failed_turns: int = 0
     cleanup_guard_turns: int = 0
     cleanup_provider_failed_turns: int = 0
+    empty_transcript_turns: int = 0
     turns: list[NoteTurnView] = Field(default_factory=list)
 
 
@@ -305,9 +306,12 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
         turns = [store.get(event_id) for event_id in note.turn_ids]
         duration = sum(event.duration_seconds or 0 for event in turns)
         cleanup_failed = cleanup_guard = cleanup_provider_failed = 0
+        empty_transcript = 0
         speech_polish_open = False
         for event in turns:
             raw = store.read_raw_transcript(event.id) or ""
+            if event.asr_status == "completed" and not raw.strip():
+                empty_transcript += 1
             # A silent round is not waiting on optional cleanup.
             if not raw.strip():
                 continue
@@ -357,6 +361,7 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             cleanup_failed_turns=cleanup_failed,
             cleanup_guard_turns=cleanup_guard,
             cleanup_provider_failed_turns=cleanup_provider_failed,
+            empty_transcript_turns=empty_transcript,
             turns=(
                 [turn_view(event.id, include_text=False) for event in turns]
                 if include_turns

@@ -225,9 +225,20 @@ def test_silent_note_round_is_not_a_cleanup_failure(tmp_path):
     _note_turn(store, note, '   ', polish_status='failed', lm_version='provider_unavailable')
     view = client.get(f'/api/notes/{note.id}').json()
     assert view['state'] == 'completed'
+    assert view['turn_count'] == 1
+    assert view['empty_transcript_turns'] == 1
     assert view['cleanup_failed_turns'] == 0
     assert view['cleanup_provider_failed_turns'] == 0
     assert view['cleanup_guard_turns'] == 0
+    note = store.get_note(note.id)
+    _note_turn(
+        store, note, 'A synthetic sentence about buffers.',
+        polish_status='completed', polished_revision=1, lm_version='test',
+    )
+    mixed = client.get(f'/api/notes/{note.id}').json()
+    assert mixed['turn_count'] == 2
+    assert mixed['empty_transcript_turns'] == 1
+    assert mixed['state'] == 'completed'
 
 
 def test_note_history_labels_original_kept_separately_from_provider_failure(tmp_path):

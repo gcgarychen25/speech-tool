@@ -163,13 +163,24 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "transcript saved · cleaning up" in turn
     assert turn.index("!turnHasSpeech(turn)") < turn.index("quality_rejected")
     assert 'return "no detected speech"' in turn
+    note_status = javascript.split('if (item.state === "empty")', 1)[1].split("function historyMetaIsSerious", 1)[0]
+    assert "empty_transcript_turns" in note_status
+    assert "item.empty_transcript_turns === item.turn_count" in note_status
+    assert 'return "no detected speech"' in note_status
+    assert note_status.index("polishing_failed") < note_status.index("empty_transcript_turns")
     pause = javascript.split("function noteCleanupPause", 1)[1].split("function ", 1)[0]
     assert "!turnHasSpeech(detail)" in pause
     assert 'placeholder = detail.asr_status !== "completed"' in javascript
     assert '"No detected speech."' in javascript
     summary = javascript.split("el('cleanupSummary').textContent", 1)[1].split("function rememberStoppedLecture", 1)[0]
     assert summary.index("detail.cleanup_pending_chunks") < summary.index("parts still processing.")
+    assert "No speech was detected, so there is nothing to clean up." in summary
+    assert summary.index("detail.cleanup_pending_chunks") < summary.index("nothing to clean up")
+    assert summary.index("nothing to clean up") < summary.index("Original text stays available.")
     assert "Optional cleanup. Original text stays available." in summary
+    uploaded = javascript.split("const uploaded = detail.chunk_count || 0;", 1)[1].split("if (detail.transcription_pending_chunks)", 1)[0]
+    assert 'part${uploaded === 1 ? "" : "s"} uploaded' in uploaded
+    assert "parts uploaded" not in uploaded
     assert "transcript saved · cleanup needs retry" in turn
     chunk = javascript.split("async function saveLectureChunk", 1)[1].split("async function ", 1)[0]
     assert chunk.index("continueLectureCapture") < chunk.index("await state.captureReady")
