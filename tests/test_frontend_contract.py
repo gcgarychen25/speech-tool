@@ -150,11 +150,15 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "need transcription retry" in javascript
     session_status = javascript.split("if (item.kind === 'session')", 1)[1].split("if (item.state === \"empty\")", 1)[0]
     assert session_status.index("transcription_pending_chunks") < session_status.index("cleanup_failed_chunks")
+    assert session_status.index("duplicate_chunk_indices") < session_status.index("empty_transcript_chunks")
     assert session_status.index("empty_transcript_chunks") < session_status.index("cleanup_failed_chunks")
+    assert session_status.index("cleanup_pending_chunks") < session_status.rindex("empty_transcript_chunks")
     assert "duplicate part numbers · review" in session_status
     health_title = javascript.split("lectureHealthTitle').textContent", 1)[1].split("const parts", 1)[0]
     assert health_title.index("transcription_pending_chunks") < health_title.index("providerPause")
+    assert health_title.index("duplicate.length") < health_title.index("empty_transcript_chunks")
     assert health_title.index("empty_transcript_chunks") < health_title.index("AI cleanup unfinished")
+    assert health_title.index("cleanup_pending_chunks") < health_title.rindex("empty_transcript_chunks")
     assert "Duplicate part numbers need review" in health_title
     assert health_title.index("AI cleanup unfinished") < health_title.index("cleanup_pending_chunks")
     assert "Transcript saved · cleaning up" in health_title
@@ -167,7 +171,12 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "empty_transcript_turns" in note_status
     assert "item.empty_transcript_turns === item.turn_count" in note_status
     assert 'return "no detected speech"' in note_status
+    assert "1 round has no detected speech" in note_status
+    assert note_status.index('return "no detected speech"') < note_status.index("1 round has no detected speech")
     assert note_status.index("polishing_failed") < note_status.index("empty_transcript_turns")
+    retry = javascript.split("function polishRetryVisible", 1)[1].split("function ", 1)[0]
+    assert 'detail.asr_status === "completed" && !turnHasSpeech(detail)' in retry
+    assert "return false" in retry
     pause = javascript.split("function noteCleanupPause", 1)[1].split("function ", 1)[0]
     assert "!turnHasSpeech(detail)" in pause
     assert 'placeholder = detail.asr_status !== "completed"' in javascript

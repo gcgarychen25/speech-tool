@@ -564,6 +564,8 @@ function turnStatus(turn) {
   return "ready";
 }
 function polishRetryVisible(detail) {
+  // Silence is a capture result. Retry polish cannot create a transcript.
+  if (detail.asr_status === "completed" && !turnHasSpeech(detail)) return false;
   return detail.polish_status === "failed"
     || ["timeout", "error", "empty", "provider_unavailable", "model_unavailable", "quality_rejected"].includes(detail.lm_version);
 }
@@ -592,13 +594,20 @@ function itemStatus(item) {
     }
     if (item.asr_failed_chunks) return 'audio saved · transcription needs retry';
     if (item.transcription_pending_chunks) return 'audio saved · transcribing';
+    if (item.duplicate_chunk_indices?.length) return 'duplicate part numbers · review';
+    // Every stored part is silent. Say that before any cleanup label, including
+    // a stale failure count that does not describe these parts.
+    if (item.chunk_count && item.empty_transcript_chunks === item.chunk_count) {
+      const silent = item.empty_transcript_chunks;
+      return silent === 1 ? "1 part has no detected speech" : `${silent} parts have no detected speech`;
+    }
+    if (item.cleanup_failed_chunks) return cleanupListStatus(cleanupBreakdown(item));
+    if (item.cleanup_pending_chunks) return 'transcript saved · cleaning up';
+    // A quiet part does not hide cleanup that still applies to the other parts.
     if (item.empty_transcript_chunks) {
       const silent = item.empty_transcript_chunks;
       return silent === 1 ? "1 part has no detected speech" : `${silent} parts have no detected speech`;
     }
-    if (item.duplicate_chunk_indices?.length) return 'duplicate part numbers · review';
-    if (item.cleanup_failed_chunks) return cleanupListStatus(cleanupBreakdown(item));
-    if (item.cleanup_pending_chunks) return 'transcript saved · cleaning up';
     if (item.chunk_count) return 'transcript saved';
     return item.status === 'open' ? 'open' : 'ended';
   }
@@ -627,6 +636,12 @@ function itemStatus(item) {
     && item.turn_count
     && item.empty_transcript_turns === item.turn_count
   ) return "no detected speech";
+  // Cleanup and transcription already had their say. Name the quiet rounds
+  // instead of calling the rest of the note ready.
+  if (item.state === "completed" && item.empty_transcript_turns) {
+    const silent = item.empty_transcript_turns;
+    return silent === 1 ? "1 round has no detected speech" : `${silent} rounds have no detected speech`;
+  }
   return "ready";
 }
 function historyMetaIsSerious(item, status) {
@@ -1967,17 +1982,20 @@ function renderLectureHealth(detail) {
   el('lectureHealth').dataset.attention = Boolean(missing.length || failed || duplicate.length || detail.empty_transcript_chunks || providerPause);
   // Capture and transcription come before optional cleanup, so a later part
   // still transcribing is not described as a saved transcript.
+  const onlySilence = Boolean(detail.chunk_count) && detail.empty_transcript_chunks === detail.chunk_count;
   el('lectureHealthTitle').textContent = !detail.chunk_count ? 'Ready to record'
     : missing.length ? 'Some audio has not reached this lecture'
     : failed ? 'Audio saved · transcription needs retry'
     : detail.transcription_pending_chunks ? 'Audio saved · transcribing'
-    : detail.empty_transcript_chunks === 1 ? 'Audio saved · 1 part has no detected speech'
-    : detail.empty_transcript_chunks ? `Audio saved · ${detail.empty_transcript_chunks} parts have no detected speech`
     : duplicate.length ? 'Duplicate part numbers need review'
+    : onlySilence && detail.empty_transcript_chunks === 1 ? 'Audio saved · 1 part has no detected speech'
+    : onlySilence && detail.empty_transcript_chunks ? `Audio saved · ${detail.empty_transcript_chunks} parts have no detected speech`
     : providerPause ? 'Transcript saved · AI cleanup unavailable'
     : guardOnly ? 'Transcript saved · original kept'
     : cleanup ? 'Transcript saved · AI cleanup unfinished'
     : detail.cleanup_pending_chunks ? 'Transcript saved · cleaning up'
+    : detail.empty_transcript_chunks === 1 ? 'Audio saved · 1 part has no detected speech'
+    : detail.empty_transcript_chunks ? `Audio saved · ${detail.empty_transcript_chunks} parts have no detected speech`
     : 'Transcript saved';
   const uploaded = detail.chunk_count || 0;
   const parts = [
@@ -2026,7 +2044,6 @@ function renderLectureHealth(detail) {
   el('retryCleanup').hidden = !cleanup;
   el('copyTranscriptPath').hidden = !(detail.chunk_count > 0);
   const notesClause = cleanupNotesClause();
-  const onlySilence = Boolean(detail.chunk_count) && detail.empty_transcript_chunks === detail.chunk_count;
   el('cleanupSummary').textContent = providerPause
     ? `Cleanup is paused for ${cleanupPausePhrase(cooldown)} after repeated provider failures. Original transcript text stays available. Retry cleanup tries again now. ${notesClause}`
     : guardOnly
