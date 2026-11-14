@@ -1442,10 +1442,12 @@ async function sync() {
   }
 }
 function hasPending() {
+  // An empty lecture is not unfinished transcription or cleanup. Polling it
+  // forever would keep refreshing history after the work has stopped.
   return state.history.some((item) =>
     item.transcription_pending_chunks
     || item.cleanup_pending_chunks
-    || ["transcribing", "polishing", "captured", "transcribed", "open"].includes(item.state));
+    || ["transcribing", "polishing", "captured", "transcribed"].includes(item.state));
 }
 
 function recordingUI(on) {
@@ -2086,12 +2088,45 @@ function stoppedNoteTakeStatus(error) {
   const tail = "This note take was not saved. Record it again; Recover audio only keeps lecture parts.";
   return reason ? `${reason}. ${tail}` : tail;
 }
+function lectureEndClause(pending) {
+  if (pending === 1) return "A lecture is not marked ended yet; that end request retries automatically.";
+  if (pending > 1) return "Lectures are not marked ended yet; those end requests retry automatically.";
+  return "";
+}
 function lectureEndPendingStatus(base, pending) {
-  if (!pending) return base;
-  const clause = pending === 1
-    ? "A lecture is not marked ended yet; that end request retries automatically."
-    : "Lectures are not marked ended yet; those end requests retry automatically.";
-  return `${base} ${clause}`;
+  const clause = lectureEndClause(pending);
+  return clause ? `${base} ${clause}` : base;
+}
+function lectureEndDoneClause(text) {
+  return text.includes("those end requests retry automatically")
+    ? "Those lectures are marked ended."
+    : "The lecture is marked ended.";
+}
+function settledLectureEndText(text, pending) {
+  const waiting = lectureEndClause(1);
+  const waitingMany = lectureEndClause(2);
+  if (!text || (!text.includes(waiting) && !text.includes(waitingMany))) return null;
+  const base = text.replaceAll(waitingMany, "").replaceAll(waiting, "").replace(/[ \t]{2,}/g, " ").trim();
+  const clause = lectureEndClause(pending);
+  if (clause) return base ? `${base} ${clause}` : clause;
+  const done = lectureEndDoneClause(text);
+  return base ? `${base} ${done}` : done;
+}
+function settleLectureEndStatus(pending) {
+  // Only a line that still claims the end is waiting may change. A newer
+  // status, and a retry that never ran, stay as they are.
+  if (state.recording || state.noteTakePending) return;
+  const nextStatus = settledLectureEndText(state.lastStatus || "", pending);
+  if (nextStatus != null && nextStatus !== state.lastStatus) setStatus(nextStatus);
+  const notice = el("captureNotice");
+  const current = notice.textContent || "";
+  const nextNotice = settledLectureEndText(current, pending);
+  if (nextNotice == null || nextNotice === current) return;
+  if (!nextNotice) {
+    clearCaptureNotice(current);
+    return;
+  }
+  notice.textContent = nextNotice;
 }
 function liveUploadFailureStatus(error) {
   const prefix = `Recording lecture · part ${state.chunkIndex + 1}.`;
@@ -2116,12 +2151,7 @@ function rejectedUploadStopStatus(captureId) {
   const where = tabOnly
     ? "This part is only in this tab and will not retry until you use Recover audio. Keep this tab open."
     : "This part stays on this device and will not retry until you use Recover audio.";
-  const pending = state.stopEndPending;
-  const ending = !pending ? ""
-    : pending === 1
-      ? " The lecture is not marked ended yet; that end request retries automatically."
-      : " Lectures are not marked ended yet; those end requests retry automatically.";
-  return `Recording stopped. ${where}${ending}`;
+  return lectureEndPendingStatus(`Recording stopped. ${where}`, state.stopEndPending);
 }
 async function finishStoppedLectures() {
   let pending = 0;
@@ -3236,11 +3266,19 @@ async function recoverSavedAudio(manual = false) {
       }
     }
     let endPending = 0;
-    if (manual) endPending = await finishStoppedLectures();
-    else if (!state.recording && navigator.locks) {
-      endPending = await navigator.locks.request('speech-microphone', {ifAvailable:true}, async lock => (
-        lock ? finishStoppedLectures() : 0
-      )) || 0;
+    let endChecked = false;
+    if (manual) {
+      endPending = await finishStoppedLectures();
+      endChecked = true;
+    } else if (!state.recording && navigator.locks) {
+      const ended = await navigator.locks.request('speech-microphone', {ifAvailable:true}, async lock => (
+        lock ? finishStoppedLectures() : null
+      ));
+      // A missed lock did not check the end requests. Leave the waiting line.
+      if (ended != null) {
+        endPending = ended;
+        endChecked = true;
+      }
     }
     const downloadedClause = downloadedRecoverySuffix(downloaded, downloadedMemory);
     const waiting = recoveryStillWaitingClause(failed, failedMemory);
@@ -3259,6 +3297,8 @@ async function recoverSavedAudio(manual = false) {
       statusBesideUnsaved(lectureEndPendingStatus(recoveryAttentionStatus(failed, failedMemory, lastFailureDetail), endPending), 0, true);
     } else if (manual && endPending) {
       statusBesideUnsaved(lectureEndPendingStatus("Saved audio stays on the server.", endPending), 0, true);
+    } else if (endChecked) {
+      settleLectureEndStatus(endPending);
     }
     await sync();
   } catch (error) {

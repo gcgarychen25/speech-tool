@@ -47,6 +47,7 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "cleanup_pending_chunks" in pending
     assert '"captured"' in pending
     assert '"transcribed"' in pending
+    assert '"open"' not in pending
     pause = javascript.split("function noteCleanupPause", 1)[1].split("function ", 1)[0]
     assert "quality_rejected" in pause
     assert "provider_unavailable" in pause
@@ -142,9 +143,20 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "setStatus(error.message)" not in javascript.split("copyInspectorPolished.addEventListener", 1)[1].split("retryInspectorPolish", 1)[0]
     assert "will not retry until you use Recover audio" in javascript
     assert "not marked ended yet" in javascript
+    end_clause = javascript.split("function lectureEndClause", 1)[1].split("function ", 1)[0]
+    assert "that end request retries automatically" in end_clause
+    assert "those end requests retry automatically" in end_clause
     end_status = javascript.split("function lectureEndPendingStatus", 1)[1].split("function ", 1)[0]
-    assert "that end request retries automatically" in end_status
-    assert "those end requests retry automatically" in end_status
+    assert "lectureEndClause(pending)" in end_status
+    done = javascript.split("function lectureEndDoneClause", 1)[1].split("function ", 1)[0]
+    assert "The lecture is marked ended." in done
+    assert "Those lectures are marked ended." in done
+    settled = javascript.split("function settledLectureEndText", 1)[1].split("function settleLectureEndStatus", 1)[0]
+    assert "lectureEndDoneClause(text)" in settled
+    assert "replaceAll(waitingMany" in settled
+    settle = javascript.split("function settleLectureEndStatus", 1)[1].split("function ", 1)[0]
+    assert "state.recording || state.noteTakePending" in settle
+    assert "captureNotice" in settle
     assert "that retry continues automatically" not in javascript
     assert "still transcribing" in javascript
     assert "need transcription retry" in javascript
@@ -281,6 +293,11 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "statusBesideUnsaved(captureBlockedMessage(true), 0, true)" in recover
     assert "statusBesideUnsaved(reason" in recover
     assert 'setStatus(lectureEndPendingStatus(' not in recover
+    assert "lock ? finishStoppedLectures() : null" in recover
+    assert "ended != null" in recover
+    assert "endChecked" in recover
+    assert recover.index("} else if (endChecked)") > recover.index("manual && endPending")
+    assert "settleLectureEndStatus(endPending)" in recover
     question_failure = javascript.split("function showQuestionSaveFailure", 1)[1].split("function queueQuestionSave", 1)[0]
     assert "statusHasUnsaved(status)" in question_failure
     assert "statusHasUnsaved(notice)" in question_failure
