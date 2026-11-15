@@ -682,6 +682,14 @@ def test_noise_chunks_are_omitted_from_lecture_display(tmp_path):
     assert "first principle" in store.session_display_text(session.id)
     assert "ව" not in store.session_display_text(session.id)
     assert "ව" in store.session_raw_text(session.id)
+    assert "ව" not in store.session_polished_text(session.id)
+    store.patch_session(
+        session.id,
+        text="edited principle",
+        draft_chunk_ids=[good.id],
+        base_revision=0,
+    )
+    assert store.session_display_text(session.id) == "edited principle"
 
 
 def test_reopen_session_clears_ended_state(tmp_path):

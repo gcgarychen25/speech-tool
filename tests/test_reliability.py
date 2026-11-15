@@ -103,6 +103,34 @@ def test_polish_cooldown_skips_provider_calls(tmp_path):
     assert "provider down" in (done.last_error or "")
 
 
+def test_noise_transcript_skips_provider_and_keeps_cooldown(tmp_path):
+    store = EventStore(tmp_path)
+    event = store.create_from_audio(b"audio", "a.wav", 30)
+    store.write_raw_transcript(event.id, "ව" * 200)
+    store.update_event(event.id, lambda e: (
+        setattr(e, "asr_status", "completed"),
+        setattr(e, "transcript_revision", 1),
+    ))
+    calls = []
+
+    class Counting:
+        def polish(self, *args, **kwargs):
+            calls.append(1)
+            return PolishResult("spoken", "test", "provider_unavailable", "provider down")
+
+    pipe = Pipeline(store, asr=FakeAsr(), polisher=Counting(), auto_start=False)
+    pipe._polish_cooldown_until = time.monotonic() + 60
+    pipe._run_polish(event.id, 1)
+    assert calls == []
+    done = store.get(event.id)
+    assert done.polish_status == "completed"
+    assert done.lm_version == "noise"
+    assert done.last_error is None
+    pipe.retry_polish(event.id)
+    assert calls == []
+    assert pipe._polish_cooldown_until > time.monotonic()
+
+
 def test_silent_transcript_skips_provider_during_cooldown(tmp_path):
     store = EventStore(tmp_path)
     event = store.create_from_audio(b"audio", "a.wav", 1)

@@ -220,9 +220,14 @@ class Pipeline:
         self.enqueue_asr(event_id)
 
     def retry_polish(self, event_id: str) -> None:
-        event = self.store.get(event_id)
-        if not self.store.read_raw_transcript(event_id):
+        raw = self.store.read_raw_transcript(event_id)
+        if raw is None:
             raise RuntimeError("Raw transcript missing; run ASR first")
+        event = self.store.get(event_id)
+        # Silence and microphone noise are not cleanup work. Leave a provider
+        # pause in place instead of clearing it for a retry that cannot help.
+        if is_noise_transcript(raw, event.duration_seconds or 0):
+            return
         self.clear_polish_cooldown()
         self._update_event(event_id, polish_status="pending", last_error=None)
         self.enqueue_polish(event_id)
@@ -410,16 +415,17 @@ class Pipeline:
             raw = self.store.read_raw_transcript(event_id)
             if raw is None:
                 return
-            if not raw.strip():
-                # No speech was detected. Do not call the provider or record a
-                # cleanup failure, including while automatic cleanup is paused.
+            if is_noise_transcript(raw, event.duration_seconds or 0):
+                # Silence or leftover microphone noise is not lecture speech.
+                # Do not call the provider or record a cleanup failure, including
+                # while automatic cleanup is paused. Raw audio and raw text stay.
                 self.store.write_polished_transcript(event_id, "")
                 self._update_event(
                     event_id,
                     polish_status="completed",
                     polished_revision=revision,
                     lm_model="none",
-                    lm_version="no_speech",
+                    lm_version="no_speech" if not raw.strip() else "noise",
                     last_error=None,
                 )
                 return

@@ -106,6 +106,7 @@ class NoteTurnView(BaseModel):
     polish_available: bool
     lm_version: Optional[str] = None
     preview: str = ""
+    skipped_noise: bool = False
     raw_transcript: Optional[str] = None
     polished_transcript: Optional[str] = None
     asr_draft: Optional[str] = None
@@ -128,6 +129,7 @@ class NoteView(BaseModel):
     cleanup_guard_turns: int = 0
     cleanup_provider_failed_turns: int = 0
     empty_transcript_turns: int = 0
+    noise_transcript_turns: int = 0
     turns: list[NoteTurnView] = Field(default_factory=list)
 
 
@@ -160,6 +162,7 @@ class SessionView(BaseModel):
     last_error: Optional[str] = None
     transcribed_chunks: int = 0
     empty_transcript_chunks: int = 0
+    noise_transcript_chunks: int = 0
     transcription_pending_chunks: int = 0
     asr_failed_chunks: int = 0
     cleanup_failed_chunks: int = 0
@@ -267,6 +270,9 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
         event = store.get(event_id)
         raw = store.read_raw_transcript(event_id)
         polished = store.current_polished_transcript(event_id)
+        skipped_noise = bool((raw or "").strip()) and is_noise_transcript(
+            raw or "", event.duration_seconds or 0
+        )
         polish_available = bool(
             event.polish_status == "completed"
             and event.lm_version
@@ -293,6 +299,7 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             polish_available=polish_available,
             lm_version=event.lm_version,
             preview=(raw or "").strip().replace("\n", " ")[:120],
+            skipped_noise=skipped_noise,
             raw_transcript=raw if include_text else None,
             polished_transcript=polished if include_text else None,
             asr_draft=store.read_asr_draft(event_id) if include_text else None,
@@ -306,14 +313,17 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
         turns = [store.get(event_id) for event_id in note.turn_ids]
         duration = sum(event.duration_seconds or 0 for event in turns)
         cleanup_failed = cleanup_guard = cleanup_provider_failed = 0
-        empty_transcript = 0
+        empty_transcript = noise_transcript = 0
         speech_polish_open = False
         for event in turns:
             raw = store.read_raw_transcript(event.id) or ""
+            noise = bool(raw.strip()) and is_noise_transcript(raw, event.duration_seconds or 0)
             if event.asr_status == "completed" and not raw.strip():
                 empty_transcript += 1
-            # A silent round is not waiting on optional cleanup.
-            if not raw.strip():
+            if event.asr_status == "completed" and noise:
+                noise_transcript += 1
+            # Silence and leftover microphone noise are not waiting on cleanup.
+            if not raw.strip() or noise:
                 continue
             cleaned = store.current_polished_transcript(event.id) or ""
             issue = polish_quality_issue(raw, cleaned) if cleaned else None
@@ -362,6 +372,7 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             cleanup_guard_turns=cleanup_guard,
             cleanup_provider_failed_turns=cleanup_provider_failed,
             empty_transcript_turns=empty_transcript,
+            noise_transcript_turns=noise_transcript,
             turns=(
                 [turn_view(event.id, include_text=False) for event in turns]
                 if include_turns
@@ -387,21 +398,23 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
         }
         worst_n = 0
         transcribed = asr_failed = cleanup_failed = cleanup_pending = 0
-        empty_transcript = transcription_pending = 0
+        empty_transcript = noise_transcript = transcription_pending = 0
         cleanup_guard = cleanup_provider_failed = 0
         indices = []
         for event_id in session.chunk_ids:
             event = store.get(event_id)
             chunks.append(event)
             raw = store.read_raw_transcript(event.id) or ''
-            heard = bool(raw.strip())
+            noise = bool(raw.strip()) and is_noise_transcript(raw, event.duration_seconds or 0)
+            heard = bool(raw.strip()) and not noise
             cleaned = store.current_polished_transcript(event.id) or '' if heard else ''
             issue = polish_quality_issue(raw, cleaned) if heard and cleaned else None
             transcribed += int(event.asr_status == 'completed' and heard)
-            empty_transcript += int(event.asr_status == 'completed' and not heard)
+            empty_transcript += int(event.asr_status == 'completed' and not raw.strip())
+            noise_transcript += int(event.asr_status == 'completed' and noise)
             transcription_pending += int(event.asr_status in {'pending', 'running'})
             asr_failed += int(event.asr_status == 'failed')
-            # Silence is a capture result. It does not count as cleanup work.
+            # Silence and leftover microphone noise are not cleanup work.
             if heard:
                 cleanup_failed += int(event.polish_status == 'failed' or bool(issue))
                 guarded = event.lm_version == 'quality_rejected' or bool(issue)
@@ -503,6 +516,7 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             cleanup_provider_detail=provider.get("last_detail"),
             transcribed_chunks=transcribed,
             empty_transcript_chunks=empty_transcript,
+            noise_transcript_chunks=noise_transcript,
             transcription_pending_chunks=transcription_pending,
             asr_failed_chunks=asr_failed,
             cleanup_failed_chunks=cleanup_failed,
@@ -521,7 +535,11 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             latest_question=store.latest_question(session_id) if include_text else None,
             latest_question_suggestion=store.latest_question_suggestion(session_id) if include_text else None,
             chunks=chunk_views,
-            draft_chunk_ids=[e.id for e in store.session_chunks(session_id) if store.read_raw_transcript(e.id)],
+            draft_chunk_ids=[
+                e.id for e in store.session_chunks(session_id)
+                if (raw := store.read_raw_transcript(e.id))
+                and not is_noise_transcript(raw, e.duration_seconds or 0)
+            ],
             last_error=last_error,
         )
 
@@ -760,6 +778,14 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             raise HTTPException(404, "Session not found")
         source_chunks = store.session_chunks(session_id)
         confusion = body.confusion.strip() or store.read_listener_notes(session_id)
+
+        def lecture_context_text(event) -> str:
+            raw = store.read_raw_transcript(event.id) or ""
+            # Mic noise stays in the raw file. It is not lecture context.
+            if is_noise_transcript(raw, event.duration_seconds or 0):
+                return ""
+            return raw
+
         context_source = "Selected lecture anchor"
         if body.anchor_chunk_id:
             ids = [e.id for e in source_chunks]
@@ -768,9 +794,11 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             source_chunks = source_chunks[max(0, ids.index(body.anchor_chunk_id) - 1):ids.index(body.anchor_chunk_id) + 1]
         else:
             indices, context_source = relevant_context_indices(
-                [store.read_raw_transcript(e.id) or "" for e in source_chunks], confusion)
+                [lecture_context_text(event) for event in source_chunks], confusion)
             source_chunks = [source_chunks[i] for i in indices]
-        lecture = "\n\n".join(store.read_raw_transcript(e.id) or "" for e in source_chunks)
+        lecture = "\n\n".join(
+            text for event in source_chunks if (text := lecture_context_text(event).strip())
+        )
         if body.lecture_excerpt.strip():
             lecture = body.lecture_excerpt[:6000]
             source_chunks = []  # Editable selected text has no exact raw-event attribution.

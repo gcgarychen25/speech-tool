@@ -550,6 +550,8 @@ function turnStatus(turn) {
   if (turn.asr_status === "failed") return "transcription failed";
   if (turn.asr_status !== "completed") return "transcribing";
   if (!turnHasSpeech(turn)) return "no detected speech";
+  // ASR produced text, but it was leftover microphone noise. The note did not keep it.
+  if (turn.skipped_noise || turn.lm_version === "noise") return "left out of the note";
   if (turn.lm_version === "quality_rejected") return "transcript saved · original kept";
   if (turn.polish_status === "failed") {
     return turn.lm_version === "provider_unavailable" || turn.lm_version === "model_unavailable"
@@ -566,6 +568,7 @@ function turnStatus(turn) {
 function polishRetryVisible(detail) {
   // Silence is a capture result. Retry polish cannot create a transcript.
   if (detail.asr_status === "completed" && !turnHasSpeech(detail)) return false;
+  if (detail.skipped_noise || detail.lm_version === "noise") return false;
   return detail.polish_status === "failed"
     || ["timeout", "error", "empty", "provider_unavailable", "model_unavailable", "quality_rejected"].includes(detail.lm_version);
 }
@@ -601,12 +604,24 @@ function itemStatus(item) {
       const silent = item.empty_transcript_chunks;
       return silent === 1 ? "1 part has no detected speech" : `${silent} parts have no detected speech`;
     }
+    if (item.chunk_count && item.noise_transcript_chunks === item.chunk_count) {
+      const noise = item.noise_transcript_chunks;
+      return noise === 1 ? "1 part left out of the draft" : `${noise} parts left out of the draft`;
+    }
+    if (
+      item.chunk_count
+      && (item.empty_transcript_chunks || 0) + (item.noise_transcript_chunks || 0) === item.chunk_count
+    ) return "no lecture speech kept";
     if (item.cleanup_failed_chunks) return cleanupListStatus(cleanupBreakdown(item));
     if (item.cleanup_pending_chunks) return 'transcript saved · cleaning up';
-    // A quiet part does not hide cleanup that still applies to the other parts.
+    // A quiet or noisy part does not hide cleanup that still applies to the other parts.
     if (item.empty_transcript_chunks) {
       const silent = item.empty_transcript_chunks;
       return silent === 1 ? "1 part has no detected speech" : `${silent} parts have no detected speech`;
+    }
+    if (item.noise_transcript_chunks) {
+      const noise = item.noise_transcript_chunks;
+      return noise === 1 ? "1 part left out of the draft" : `${noise} parts left out of the draft`;
     }
     if (item.chunk_count) return 'transcript saved';
     return item.status === 'open' ? 'open' : 'ended';
@@ -636,11 +651,28 @@ function itemStatus(item) {
     && item.turn_count
     && item.empty_transcript_turns === item.turn_count
   ) return "no detected speech";
+  if (
+    item.state === "completed"
+    && item.turn_count
+    && item.noise_transcript_turns === item.turn_count
+  ) {
+    const noise = item.noise_transcript_turns;
+    return noise === 1 ? "1 round left out of the note" : `${noise} rounds left out of the note`;
+  }
+  if (
+    item.state === "completed"
+    && item.turn_count
+    && (item.empty_transcript_turns || 0) + (item.noise_transcript_turns || 0) === item.turn_count
+  ) return "no lecture speech kept";
   // Cleanup and transcription already had their say. Name the quiet rounds
   // instead of calling the rest of the note ready.
   if (item.state === "completed" && item.empty_transcript_turns) {
     const silent = item.empty_transcript_turns;
     return silent === 1 ? "1 round has no detected speech" : `${silent} rounds have no detected speech`;
+  }
+  if (item.state === "completed" && item.noise_transcript_turns) {
+    const noise = item.noise_transcript_turns;
+    return noise === 1 ? "1 round left out of the note" : `${noise} rounds left out of the note`;
   }
   return "ready";
 }
@@ -952,6 +984,8 @@ function updateInspectorFields(detail, isLatest) {
     ? "Waiting for ASR…"
     : !turnHasSpeech(detail)
       ? "No detected speech."
+      : (detail.skipped_noise || detail.lm_version === "noise")
+        ? "Left out of the note. Raw audio stays saved."
       : (["pending", "running"].includes(detail.polish_status) ? "Polishing…"
       : polishRetryVisible(detail) && !detail.polished_draft
         ? "Original transcript kept. Cleanup did not replace it."
@@ -970,6 +1004,7 @@ function updateInspectorFields(detail, isLatest) {
 }
 function noteCleanupPause(detail) {
   if (detail.asr_status === "completed" && !turnHasSpeech(detail)) return "";
+  if (detail.skipped_noise || detail.lm_version === "noise") return "";
   const note = state.note || {};
   const cooldown = Math.max(0, Number(note.cleanup_cooldown_seconds) || 0);
   const providerDown = note.cleanup_provider_available === false || cooldown > 0;
@@ -1357,7 +1392,7 @@ async function renderSession(detail, seed = false) {
     state.mergedChunks = new Set(detail.draft_chunk_ids || []);
     if (!state.mergedChunks.size) {
       for (const chunk of detail.chunks || []) {
-        if (chunk.raw_transcript) state.mergedChunks.add(chunk.id);
+        if (chunk.raw_transcript && !chunk.skip_merge) state.mergedChunks.add(chunk.id);
       }
     }
   }
@@ -1984,7 +2019,14 @@ function renderLectureHealth(detail) {
   el('lectureHealth').dataset.attention = Boolean(missing.length || failed || duplicate.length || detail.empty_transcript_chunks || providerPause);
   // Capture and transcription come before optional cleanup, so a later part
   // still transcribing is not described as a saved transcript.
+  const noise = detail.noise_transcript_chunks || 0;
   const onlySilence = Boolean(detail.chunk_count) && detail.empty_transcript_chunks === detail.chunk_count;
+  const onlyNoise = Boolean(detail.chunk_count) && noise === detail.chunk_count;
+  const onlyNonSpeech = Boolean(detail.chunk_count)
+    && (detail.empty_transcript_chunks || 0) + noise === detail.chunk_count;
+  const noiseTitle = noise === 1
+    ? 'Audio saved · 1 part left out of the draft'
+    : `Audio saved · ${noise} parts left out of the draft`;
   el('lectureHealthTitle').textContent = !detail.chunk_count ? 'Ready to record'
     : missing.length ? 'Some audio has not reached this lecture'
     : failed ? 'Audio saved · transcription needs retry'
@@ -1992,12 +2034,15 @@ function renderLectureHealth(detail) {
     : duplicate.length ? 'Duplicate part numbers need review'
     : onlySilence && detail.empty_transcript_chunks === 1 ? 'Audio saved · 1 part has no detected speech'
     : onlySilence && detail.empty_transcript_chunks ? `Audio saved · ${detail.empty_transcript_chunks} parts have no detected speech`
+    : onlyNoise ? noiseTitle
+    : onlyNonSpeech ? 'Audio saved · no lecture speech kept'
     : providerPause ? 'Transcript saved · AI cleanup unavailable'
     : guardOnly ? 'Transcript saved · original kept'
     : cleanup ? 'Transcript saved · AI cleanup unfinished'
     : detail.cleanup_pending_chunks ? 'Transcript saved · cleaning up'
     : detail.empty_transcript_chunks === 1 ? 'Audio saved · 1 part has no detected speech'
     : detail.empty_transcript_chunks ? `Audio saved · ${detail.empty_transcript_chunks} parts have no detected speech`
+    : noise ? noiseTitle
     : 'Transcript saved';
   const uploaded = detail.chunk_count || 0;
   const parts = [
@@ -2017,6 +2062,11 @@ function renderLectureHealth(detail) {
     const silent = detail.empty_transcript_chunks;
     const noun = silent === 1 ? "part" : "parts";
     parts.push(`${silent} ${noun} finished without transcript text. Check your audio source; a missing speaker signal cannot be restored by text cleanup`);
+  }
+  if (noise) {
+    parts.push(noise === 1
+      ? "1 part was left out of the draft because it looks like microphone noise. Raw audio stays saved"
+      : `${noise} parts were left out of the draft because they look like microphone noise. Raw audio stays saved`);
   }
   if (missing.length) parts.push(`Missing part${missing.length === 1 ? '' : 's'}: ${missing.slice(0, 8).map(i => i + 1).join(', ')}${missing.length > 8 ? '…' : ''}. Check Recover audio in the original browser`);
   if (duplicate.length) parts.push('Duplicate part numbers need review');
@@ -2055,7 +2105,11 @@ function renderLectureHealth(detail) {
         ? "Optional cleanup. Original text is used for parts still processing."
         : onlySilence
           ? "No speech was detected, so there is nothing to clean up."
-          : "Optional cleanup. Original text stays available.";
+          : onlyNoise
+            ? "Nothing was added to the draft, so there is nothing to clean up."
+            : onlyNonSpeech
+              ? "No lecture speech was kept, so there is nothing to clean up."
+              : "Optional cleanup. Original text stays available.";
 }
 function rememberStoppedLecture(sessionId, expected) {
   localStorage.setItem(`speech-stop-${sessionId}`, JSON.stringify({expected_chunk_count: expected}));

@@ -165,6 +165,11 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert session_status.index("duplicate_chunk_indices") < session_status.index("empty_transcript_chunks")
     assert session_status.index("empty_transcript_chunks") < session_status.index("cleanup_failed_chunks")
     assert session_status.index("cleanup_pending_chunks") < session_status.rindex("empty_transcript_chunks")
+    assert session_status.index("empty_transcript_chunks === item.chunk_count") < session_status.index("noise_transcript_chunks === item.chunk_count")
+    assert session_status.index("noise_transcript_chunks === item.chunk_count") < session_status.index("cleanup_failed_chunks")
+    assert session_status.index("cleanup_pending_chunks") < session_status.rindex("noise_transcript_chunks")
+    assert "1 part left out of the draft" in session_status
+    assert "no lecture speech kept" in session_status
     assert "duplicate part numbers · review" in session_status
     health_title = javascript.split("lectureHealthTitle').textContent", 1)[1].split("const parts", 1)[0]
     assert health_title.index("transcription_pending_chunks") < health_title.index("providerPause")
@@ -174,11 +179,18 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "Duplicate part numbers need review" in health_title
     assert health_title.index("AI cleanup unfinished") < health_title.index("cleanup_pending_chunks")
     assert "Transcript saved · cleaning up" in health_title
+    assert "Audio saved · no lecture speech kept" in health_title
+    assert health_title.index("onlySilence") < health_title.index("onlyNoise")
+    assert health_title.index("onlyNoise") < health_title.index("AI cleanup unfinished")
+    assert health_title.index("cleanup_pending_chunks") < health_title.index("noise ? noiseTitle")
     turn = javascript.split("function turnStatus", 1)[1].split("function ", 1)[0]
     assert "polish skipped" not in turn
     assert "transcript saved · cleaning up" in turn
     assert turn.index("!turnHasSpeech(turn)") < turn.index("quality_rejected")
     assert 'return "no detected speech"' in turn
+    assert 'return "left out of the note"' in turn
+    assert turn.index('return "no detected speech"') < turn.index('return "left out of the note"')
+    assert turn.index('return "left out of the note"') < turn.index("quality_rejected")
     note_status = javascript.split('if (item.state === "empty")', 1)[1].split("function historyMetaIsSerious", 1)[0]
     assert "empty_transcript_turns" in note_status
     assert "item.empty_transcript_turns === item.turn_count" in note_status
@@ -186,8 +198,14 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "1 round has no detected speech" in note_status
     assert note_status.index('return "no detected speech"') < note_status.index("1 round has no detected speech")
     assert note_status.index("polishing_failed") < note_status.index("empty_transcript_turns")
+    assert "noise_transcript_turns === item.turn_count" in note_status
+    assert "1 round left out of the note" in note_status
+    assert note_status.index('return "no detected speech"') < note_status.index("1 round left out of the note")
+    assert note_status.index("1 round has no detected speech") < note_status.rindex("1 round left out of the note")
     retry = javascript.split("function polishRetryVisible", 1)[1].split("function ", 1)[0]
     assert 'detail.asr_status === "completed" && !turnHasSpeech(detail)' in retry
+    assert 'detail.lm_version === "noise"' in retry
+    assert retry.index("!turnHasSpeech(detail)") < retry.index('detail.lm_version === "noise"')
     assert "return false" in retry
     pause = javascript.split("function noteCleanupPause", 1)[1].split("function ", 1)[0]
     assert "!turnHasSpeech(detail)" in pause
@@ -196,6 +214,10 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     summary = javascript.split("el('cleanupSummary').textContent", 1)[1].split("function rememberStoppedLecture", 1)[0]
     assert summary.index("detail.cleanup_pending_chunks") < summary.index("parts still processing.")
     assert "No speech was detected, so there is nothing to clean up." in summary
+    assert "Nothing was added to the draft, so there is nothing to clean up." in summary
+    assert "No lecture speech was kept, so there is nothing to clean up." in summary
+    assert summary.index("No speech was detected") < summary.index("Nothing was added to the draft")
+    assert summary.index("Nothing was added to the draft") < summary.index("No lecture speech was kept")
     assert summary.index("detail.cleanup_pending_chunks") < summary.index("nothing to clean up")
     assert summary.index("nothing to clean up") < summary.index("Original text stays available.")
     assert "Optional cleanup. Original text stays available." in summary

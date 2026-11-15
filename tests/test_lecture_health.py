@@ -219,6 +219,44 @@ def _note_turn(store, note, raw, **updates):
     return event
 
 
+def test_noise_chunk_is_not_cleanup_and_stays_out_of_the_draft(tmp_path):
+    store, pipe, client = setup(tmp_path)
+    session = store.create_session()
+    speech = "The first principle is write learning as first-order optimization over a loss."
+    spoken = add_chunk(store, session, 0, speech)
+    noise = add_chunk(store, session, 1, "ව" * 200)
+    calls = []
+
+    class Counting:
+        def polish(self, raw, *args, **kwargs):
+            calls.append(raw[:24])
+            return PolishResult(raw, "test", "ok")
+
+    pipe.polisher = Counting()
+    for event_id in (spoken.id, noise.id):
+        pipe._run_polish(event_id, 1)
+    assert calls == [speech[:24]]
+    view = client.get(f"/api/sessions/{session.id}").json()
+    assert view["noise_transcript_chunks"] == 1
+    assert view["empty_transcript_chunks"] == 0
+    assert view["transcribed_chunks"] == 1
+    assert view["cleanup_failed_chunks"] == 0
+    assert view["cleanup_pending_chunks"] == 0
+    assert view["draft_chunk_ids"] == [spoken.id]
+    assert "first principle" in view["display_text"]
+    assert "ව" not in view["display_text"]
+    assert "ව" not in (view["polished_transcript"] or "")
+    assert "ව" in store.read_raw_transcript(noise.id)
+    note = store.create_note("Noise round")
+    _note_turn(store, note, "ව" * 200)
+    listed = client.get(f"/api/notes/{note.id}").json()
+    assert listed["state"] == "completed"
+    assert listed["noise_transcript_turns"] == 1
+    assert listed["empty_transcript_turns"] == 0
+    assert listed["cleanup_failed_turns"] == 0
+    assert listed["turns"][0]["skipped_noise"] is True
+
+
 def test_silent_note_round_is_not_a_cleanup_failure(tmp_path):
     store, _pipe, client = setup(tmp_path)
     note = store.create_note('Silent round')

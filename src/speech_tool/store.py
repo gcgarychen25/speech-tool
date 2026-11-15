@@ -765,9 +765,16 @@ class EventStore:
             text = edited.read_text(encoding="utf-8")
             # Legacy edits with no provenance cannot safely be auto-appended.
             merged = set(session.draft_chunk_ids or session.chunk_ids)
-            extra = [self.read_raw_transcript(e.id).strip()
-                     for e in self.session_chunks(session_id)
-                     if e.id not in merged and self.read_raw_transcript(e.id)]
+            extra = []
+            for event in self.session_chunks(session_id):
+                if event.id in merged:
+                    continue
+                raw = self.read_raw_transcript(event.id) or ""
+                body = raw.strip()
+                # A later noise part must not reappear in an edited draft.
+                if not body or is_noise_transcript(raw, event.duration_seconds or 0):
+                    continue
+                extra.append(body)
             return "\n\n".join([text, *extra]).strip()
         return self.session_raw_text(session.id, skip_noise=True)
 
@@ -827,6 +834,8 @@ class EventStore:
         for event in self.session_chunks(session_id):
             event_id = event.id
             raw = self.read_raw_transcript(event_id) or ''
+            if is_noise_transcript(raw, event.duration_seconds or 0):
+                continue
             cleaned = self.current_polished_transcript(event_id) or ''
             # Keep suspect historical output on disk; do not present it as
             # trustworthy cleanup. Raw text remains usable without a model call.

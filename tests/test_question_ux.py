@@ -25,6 +25,30 @@ def test_prompt_preserves_question_unless_exploration_is_explicit():
     assert "one short clarification" in build_question_prompt("what flow?", "", mode="explore")
 
 
+def test_question_context_skips_microphone_noise(tmp_path):
+    store = EventStore(tmp_path)
+    pipe = Pipeline(store, asr=FakeAsr(), polisher=PassthroughPolisher(), auto_start=False)
+    client = TestClient(create_app(store, pipe))
+    session = store.create_session(course="CV")
+    speech = store.create_from_audio(
+        b"a", "a.webm", 8, kind="lecture_chunk", session_id=session.id, chunk_index=0,
+    )
+    noise = store.create_from_audio(
+        b"b", "b.webm", 30, kind="lecture_chunk", session_id=session.id, chunk_index=1,
+    )
+    store.attach_chunk(session.id, speech.id)
+    store.attach_chunk(session.id, noise.id)
+    store.write_raw_transcript(speech.id, "YOLO uses regression to predict bounding boxes")
+    store.write_raw_transcript(noise.id, "ව" * 200)
+    response = client.post(
+        f"/api/sessions/{session.id}/questions",
+        json={"confusion": "unrelated wording please", "use_context": True, "preserve_draft": True},
+    )
+    assert response.status_code == 200
+    assert response.json()["source_event_ids"] == [speech.id]
+    assert "ව" not in response.json()["question"]
+
+
 def test_suggestion_does_not_replace_draft_and_failures_are_logged(tmp_path, monkeypatch, caplog):
     store = EventStore(tmp_path)
     pipe = Pipeline(store, asr=FakeAsr(), polisher=PassthroughPolisher(), auto_start=False)
