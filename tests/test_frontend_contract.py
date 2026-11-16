@@ -171,15 +171,27 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "1 part left out of the draft" in session_status
     assert "no lecture speech kept" in session_status
     assert "duplicate part numbers · review" in session_status
+    assert session_status.index("cleanup_pending_chunks") < session_status.index(
+        "item.empty_transcript_chunks && item.noise_transcript_chunks"
+    )
+    assert session_status.index("item.empty_transcript_chunks && item.noise_transcript_chunks") < session_status.rindex(
+        "if (item.empty_transcript_chunks)"
+    )
+    health_setup = javascript.split("function renderLectureHealth", 1)[1].split("lectureHealthTitle').textContent", 1)[0]
+    assert "const silentCount = detail.empty_transcript_chunks || 0;" in health_setup
+    assert "silentCount === detail.chunk_count" in health_setup
+    assert "const bothLeftovers = Boolean(silentCount) && Boolean(noise);" in health_setup
     health_title = javascript.split("lectureHealthTitle').textContent", 1)[1].split("const parts", 1)[0]
     assert health_title.index("transcription_pending_chunks") < health_title.index("providerPause")
-    assert health_title.index("duplicate.length") < health_title.index("empty_transcript_chunks")
-    assert health_title.index("empty_transcript_chunks") < health_title.index("AI cleanup unfinished")
-    assert health_title.index("cleanup_pending_chunks") < health_title.rindex("empty_transcript_chunks")
+    assert health_title.index("duplicate.length") < health_title.index("onlySilence")
+    assert health_title.index("onlySilence") < health_title.index("AI cleanup unfinished")
+    assert health_title.index("cleanup_pending_chunks") < health_title.index("bothLeftovers")
+    assert health_title.index("bothLeftovers") < health_title.rindex("silentCount === 1")
     assert "Duplicate part numbers need review" in health_title
     assert health_title.index("AI cleanup unfinished") < health_title.index("cleanup_pending_chunks")
     assert "Transcript saved · cleaning up" in health_title
     assert "Audio saved · no lecture speech kept" in health_title
+    assert "mixedLeftoverTitle" in health_title
     assert health_title.index("onlySilence") < health_title.index("onlyNoise")
     assert health_title.index("onlyNoise") < health_title.index("AI cleanup unfinished")
     assert health_title.index("cleanup_pending_chunks") < health_title.index("noise ? noiseTitle")
@@ -202,6 +214,11 @@ def test_note_ui_is_continuous_editor_with_collapsed_rounds():
     assert "1 round left out of the note" in note_status
     assert note_status.index('return "no detected speech"') < note_status.index("1 round left out of the note")
     assert note_status.index("1 round has no detected speech") < note_status.rindex("1 round left out of the note")
+    assert 'return "no note speech kept"' in note_status
+    assert "no lecture speech kept" not in note_status
+    assert note_status.index("no note speech kept") < note_status.index(
+        "item.empty_transcript_turns && item.noise_transcript_turns"
+    )
     retry = javascript.split("function polishRetryVisible", 1)[1].split("function ", 1)[0]
     assert 'detail.asr_status === "completed" && !turnHasSpeech(detail)' in retry
     assert 'detail.lm_version === "noise"' in retry

@@ -615,6 +615,14 @@ function itemStatus(item) {
     if (item.cleanup_failed_chunks) return cleanupListStatus(cleanupBreakdown(item));
     if (item.cleanup_pending_chunks) return 'transcript saved · cleaning up';
     // A quiet or noisy part does not hide cleanup that still applies to the other parts.
+    // Once that work is finished, name both leftovers. Silence does not hide noise.
+    if (item.empty_transcript_chunks && item.noise_transcript_chunks) {
+      const silent = item.empty_transcript_chunks;
+      const noise = item.noise_transcript_chunks;
+      const silentLabel = silent === 1 ? "1 part has no detected speech" : `${silent} parts have no detected speech`;
+      const noiseLabel = noise === 1 ? "1 part left out of the draft" : `${noise} parts left out of the draft`;
+      return `${silentLabel} · ${noiseLabel}`;
+    }
     if (item.empty_transcript_chunks) {
       const silent = item.empty_transcript_chunks;
       return silent === 1 ? "1 part has no detected speech" : `${silent} parts have no detected speech`;
@@ -663,9 +671,16 @@ function itemStatus(item) {
     item.state === "completed"
     && item.turn_count
     && (item.empty_transcript_turns || 0) + (item.noise_transcript_turns || 0) === item.turn_count
-  ) return "no lecture speech kept";
-  // Cleanup and transcription already had their say. Name the quiet rounds
-  // instead of calling the rest of the note ready.
+  ) return "no note speech kept";
+  // Cleanup and transcription already had their say. Name quiet rounds and
+  // rounds left out of the note, instead of calling the rest of the note ready.
+  if (item.state === "completed" && item.empty_transcript_turns && item.noise_transcript_turns) {
+    const silent = item.empty_transcript_turns;
+    const noise = item.noise_transcript_turns;
+    const silentLabel = silent === 1 ? "1 round has no detected speech" : `${silent} rounds have no detected speech`;
+    const noiseLabel = noise === 1 ? "1 round left out of the note" : `${noise} rounds left out of the note`;
+    return `${silentLabel} · ${noiseLabel}`;
+  }
   if (item.state === "completed" && item.empty_transcript_turns) {
     const silent = item.empty_transcript_turns;
     return silent === 1 ? "1 round has no detected speech" : `${silent} rounds have no detected speech`;
@@ -2020,28 +2035,35 @@ function renderLectureHealth(detail) {
   // Capture and transcription come before optional cleanup, so a later part
   // still transcribing is not described as a saved transcript.
   const noise = detail.noise_transcript_chunks || 0;
-  const onlySilence = Boolean(detail.chunk_count) && detail.empty_transcript_chunks === detail.chunk_count;
+  const silentCount = detail.empty_transcript_chunks || 0;
+  const onlySilence = Boolean(detail.chunk_count) && silentCount === detail.chunk_count;
   const onlyNoise = Boolean(detail.chunk_count) && noise === detail.chunk_count;
-  const onlyNonSpeech = Boolean(detail.chunk_count)
-    && (detail.empty_transcript_chunks || 0) + noise === detail.chunk_count;
-  const noiseTitle = noise === 1
-    ? 'Audio saved · 1 part left out of the draft'
-    : `Audio saved · ${noise} parts left out of the draft`;
+  const onlyNonSpeech = Boolean(detail.chunk_count) && silentCount + noise === detail.chunk_count;
+  const bothLeftovers = Boolean(silentCount) && Boolean(noise);
+  const silentLabel = silentCount === 1
+    ? "1 part has no detected speech"
+    : `${silentCount} parts have no detected speech`;
+  const noiseLabel = noise === 1
+    ? "1 part left out of the draft"
+    : `${noise} parts left out of the draft`;
+  const noiseTitle = `Audio saved · ${noiseLabel}`;
+  const mixedLeftoverTitle = `Audio saved · ${silentLabel} · ${noiseLabel}`;
   el('lectureHealthTitle').textContent = !detail.chunk_count ? 'Ready to record'
     : missing.length ? 'Some audio has not reached this lecture'
     : failed ? 'Audio saved · transcription needs retry'
     : detail.transcription_pending_chunks ? 'Audio saved · transcribing'
     : duplicate.length ? 'Duplicate part numbers need review'
-    : onlySilence && detail.empty_transcript_chunks === 1 ? 'Audio saved · 1 part has no detected speech'
-    : onlySilence && detail.empty_transcript_chunks ? `Audio saved · ${detail.empty_transcript_chunks} parts have no detected speech`
+    : onlySilence && silentCount === 1 ? 'Audio saved · 1 part has no detected speech'
+    : onlySilence && silentCount ? `Audio saved · ${silentLabel}`
     : onlyNoise ? noiseTitle
     : onlyNonSpeech ? 'Audio saved · no lecture speech kept'
     : providerPause ? 'Transcript saved · AI cleanup unavailable'
     : guardOnly ? 'Transcript saved · original kept'
     : cleanup ? 'Transcript saved · AI cleanup unfinished'
     : detail.cleanup_pending_chunks ? 'Transcript saved · cleaning up'
-    : detail.empty_transcript_chunks === 1 ? 'Audio saved · 1 part has no detected speech'
-    : detail.empty_transcript_chunks ? `Audio saved · ${detail.empty_transcript_chunks} parts have no detected speech`
+    : bothLeftovers ? mixedLeftoverTitle
+    : silentCount === 1 ? 'Audio saved · 1 part has no detected speech'
+    : silentCount ? `Audio saved · ${silentLabel}`
     : noise ? noiseTitle
     : 'Transcript saved';
   const uploaded = detail.chunk_count || 0;
