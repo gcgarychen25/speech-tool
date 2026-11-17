@@ -184,9 +184,12 @@ class Pipeline:
         for event in self.store.list_events():
             if not event.note_id or event.asr_status != "completed":
                 continue
-            raw = self.store.read_raw_transcript(event.id)
-            if raw:
-                self.store.append_turn_to_note(event.note_id, event.id, raw)
+            raw = self.store.read_raw_transcript(event.id) or ""
+            # Match live ASR: a restart must not copy silence or microphone noise
+            # into the note after the live path left it out.
+            if not raw.strip() or is_noise_transcript(raw, event.duration_seconds or 0):
+                continue
+            self.store.append_turn_to_note(event.note_id, event.id, raw)
 
     def enqueue_asr(self, event_id: str, force: bool = False) -> None:
         self._submit_asr(event_id, lambda: self._run_asr(event_id, force=force))

@@ -180,10 +180,14 @@ class EventStore:
         parts: list[str] = []
         merged: list[str] = []
         for event_id in note.turn_ids:
+            event = self.get(event_id)
             text = self.read_asr_draft(event_id)
-            if text.strip():
-                parts.append(text.strip())
-                merged.append(event_id)
+            # Silence and leftover microphone noise stay in the raw audio.
+            # The first time a note is opened, do not copy them into the draft.
+            if not text.strip() or is_noise_transcript(text, event.duration_seconds or 0):
+                continue
+            parts.append(text.strip())
+            merged.append(event_id)
         text = "\n\n".join(parts)
         self._write_note_final(note.id, text)
         note.merged_turn_ids = merged

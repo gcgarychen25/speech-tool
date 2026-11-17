@@ -158,6 +158,62 @@ def test_silent_transcript_skips_provider_during_cooldown(tmp_path):
     assert done.last_error is None
 
 
+def _completed_note_turn(store, note, raw, index, duration):
+    event = store.create_from_audio(
+        b"audio" + bytes([index]),
+        "turn.webm",
+        duration,
+        kind="note_turn",
+        note_id=note.id,
+        turn_index=index,
+    )
+    store.attach_turn(note.id, event.id)
+    store.write_raw_transcript(event.id, raw)
+    store.update_event(event.id, lambda item: (
+        setattr(item, "asr_status", "completed"),
+        setattr(item, "transcript_revision", 1),
+        setattr(item, "polish_status", "completed"),
+        setattr(item, "polished_revision", 1),
+    ))
+    return event
+
+
+def test_note_open_and_restart_leave_noise_and_silence_out_of_the_draft(tmp_path):
+    store = EventStore(tmp_path)
+    speech = "A synthetic sentence about buffers and queues."
+    noise = "ව" * 200
+    note = store.create_note("Synthetic note")
+    spoken = _completed_note_turn(store, note, speech, 0, 5)
+    noisy = _completed_note_turn(store, note, noise, 1, 30)
+    silent = _completed_note_turn(store, note, "   ", 2, 4)
+    assert store.read_note_final(note.id)[0] == ""
+
+    pipe = Pipeline(store, asr=FakeAsr(), polisher=SimpleNamespace(polish=lambda *a, **k: None), auto_start=False)
+    pipe.recover_and_resume()
+    restarted, _revision = store.read_note_final(note.id)
+    assert restarted == speech
+    saved = store.get_note(note.id)
+    assert spoken.id in saved.merged_turn_ids
+    assert noisy.id not in saved.merged_turn_ids
+    assert silent.id not in saved.merged_turn_ids
+    assert noise in store.read_raw_transcript(noisy.id)
+    pipe.recover_and_resume()
+    assert store.read_note_final(note.id)[0] == speech
+
+    # A note that has no draft file yet is filled from rounds the same way.
+    legacy = store.create_note("Legacy note")
+    legacy_spoken = _completed_note_turn(store, legacy, speech, 0, 5)
+    legacy_noise = _completed_note_turn(store, legacy, noise, 1, 30)
+    _completed_note_turn(store, legacy, "   ", 2, 4)
+    store.note_final_path(legacy.id).unlink()
+    opened, _revision = store.read_note_final(legacy.id)
+    assert opened == speech
+    saved = store.get_note(legacy.id)
+    assert legacy_spoken.id in saved.merged_turn_ids
+    assert legacy_noise.id not in saved.merged_turn_ids
+    assert noise in store.read_raw_transcript(legacy_noise.id)
+
+
 def test_empty_input_never_calls_model(monkeypatch):
     monkeypatch.setattr("speech_tool.polish.run_opencode", lambda *a: pytest.fail("model called"))
     assert OpencodePolisher().polish("  ").version == "no_speech"
