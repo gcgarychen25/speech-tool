@@ -662,6 +662,12 @@ def test_noise_chunks_are_omitted_from_lecture_display(tmp_path):
 
     assert is_noise_transcript("I'm going to come up here. " * 12, 60)
     assert is_noise_transcript("ව" * 200, 120)
+    assert is_noise_transcript("好的", 60)
+    chinese = (
+        "今天我们讨论虚函数表。数据指针指向对象。虚表保存函数地址。"
+        "静态分派在编译时确定。动态分派在运行时查找目标。"
+    )
+    assert not is_noise_transcript(chinese, 60)
     assert not is_noise_transcript(
         "The first principle is write learning as first-order optimization over a loss.",
         8,
@@ -675,18 +681,26 @@ def test_noise_chunks_are_omitted_from_lecture_display(tmp_path):
     junk = store.create_from_audio(
         b"b", "b.wav", 120.0, kind="lecture_chunk", session_id=session.id, chunk_index=1
     )
+    chinese_chunk = store.create_from_audio(
+        b"c", "c.wav", 60.0, kind="lecture_chunk", session_id=session.id, chunk_index=2
+    )
     store.attach_chunk(session.id, good.id)
     store.attach_chunk(session.id, junk.id)
+    store.attach_chunk(session.id, chinese_chunk.id)
     store.write_raw_transcript(good.id, "The first principle is write learning as first-order optimization over a loss.")
     store.write_raw_transcript(junk.id, "ව" * 200)
-    assert "first principle" in store.session_display_text(session.id)
-    assert "ව" not in store.session_display_text(session.id)
+    store.write_raw_transcript(chinese_chunk.id, chinese)
+    shown = store.session_display_text(session.id)
+    assert "first principle" in shown
+    assert "虚函数表" in shown
+    assert "ව" not in shown
     assert "ව" in store.session_raw_text(session.id)
     assert "ව" not in store.session_polished_text(session.id)
+    assert "虚函数表" in store.session_polished_text(session.id)
     store.patch_session(
         session.id,
         text="edited principle",
-        draft_chunk_ids=[good.id],
+        draft_chunk_ids=[good.id, chinese_chunk.id],
         base_revision=0,
     )
     assert store.session_display_text(session.id) == "edited principle"

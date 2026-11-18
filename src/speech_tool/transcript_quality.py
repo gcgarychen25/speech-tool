@@ -16,7 +16,9 @@ def is_noise_transcript(text: str, duration_seconds: float = 0.0) -> bool:
         return True
     if _REPEAT.search(body) or _LOOP.search(body):
         return True
-    words = re.findall(r"[A-Za-z\u4e00-\u9fff']+", body)
-    if duration_seconds >= 45 and len(words) / (duration_seconds / 60) < 18:
+    # A regex "word" would treat a whole Chinese sentence as one token, so a
+    # normal lecture minute would look as sparse as leftover microphone noise.
+    speech_units = len(re.findall(r"[A-Za-z']+", body)) + len(re.findall(r"[\u4e00-\u9fff]", body))
+    if duration_seconds >= 45 and speech_units / (duration_seconds / 60) < 18:
         return True
     return False
