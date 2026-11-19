@@ -16,6 +16,24 @@ def test_context_matches_earlier_topic_and_falls_back():
     assert relevant_context_indices(["", " "], "YOLO")[0] == []
 
 
+def test_chinese_question_matches_the_phrase_not_the_whole_sentence():
+    texts = [
+        "今天我们讨论虚函数表。数据指针指向对象。",
+        "后面讲作业提交和截止日期。",
+        "下课前再说一遍评分标准。",
+    ]
+    assert relevant_context_indices(texts, "虚函数表是什么？")[0] == [0]
+    assert relevant_context_indices(texts, "对象是什么？")[0] == [0]
+    # Function words alone must not pull an earlier excerpt.
+    assert relevant_context_indices(texts, "这个是什么意思")[0] == [1, 2]
+    filler = [
+        "这个虚函数表保存函数地址。",
+        "作业提交。",
+        "评分标准。",
+    ]
+    assert relevant_context_indices(filler, "这个是什么")[0] == [1, 2]
+
+
 def test_prompt_preserves_question_unless_exploration_is_explicit():
     prompt = build_question_prompt("YOLO regression?", "boxes")
     assert "wording-only polish" in prompt
@@ -47,6 +65,30 @@ def test_question_context_skips_microphone_noise(tmp_path):
     assert response.status_code == 200
     assert response.json()["source_event_ids"] == [speech.id]
     assert "ව" not in response.json()["question"]
+
+
+def test_chinese_question_uses_the_earlier_phrase(tmp_path):
+    store = EventStore(tmp_path)
+    pipe = Pipeline(store, asr=FakeAsr(), polisher=PassthroughPolisher(), auto_start=False)
+    client = TestClient(create_app(store, pipe))
+    session = store.create_session(course="CS")
+    early = store.create_from_audio(
+        b"a", "a.webm", 60, kind="lecture_chunk", session_id=session.id, chunk_index=0,
+    )
+    late = store.create_from_audio(
+        b"b", "b.webm", 60, kind="lecture_chunk", session_id=session.id, chunk_index=1,
+    )
+    store.attach_chunk(session.id, early.id)
+    store.attach_chunk(session.id, late.id)
+    store.write_raw_transcript(early.id, "今天我们讨论虚函数表。数据指针指向对象。")
+    store.write_raw_transcript(late.id, "后面讲作业提交和截止日期。")
+    response = client.post(
+        f"/api/sessions/{session.id}/questions",
+        json={"confusion": "虚函数表是什么？", "use_context": True, "preserve_draft": True},
+    )
+    assert response.status_code == 200
+    assert response.json()["source_event_ids"] == [early.id]
+    assert response.json()["context_source"] == "Matched lecture excerpts"
 
 
 def test_suggestion_does_not_replace_draft_and_failures_are_logged(tmp_path, monkeypatch, caplog):
