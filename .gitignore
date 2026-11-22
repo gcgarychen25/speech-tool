@@ -53,3 +53,6 @@ credentials.json
 token.json
 google-calendar.local.json
 calendar.local.json
+# Rotated logs and local hotfix backups (runtime/ is already ignored)
+*.log.[0-9]*
+*.before-*

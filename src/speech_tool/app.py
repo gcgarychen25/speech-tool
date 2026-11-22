@@ -15,6 +15,7 @@ from speech_tool.pipeline import PROVIDER_POLISH_FAILURES, Pipeline, CaptureConf
 from speech_tool.polish_quality import polish_quality_issue
 from speech_tool.store import EventStore, NoteRevisionConflict, SessionRevisionConflict
 from speech_tool.transcript_quality import is_noise_transcript
+from speech_tool.logging_setup import log_event
 
 STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "web"
 AUDIO_STORE_FAILURE = "Audio could not be stored; original upload retained in browser"
@@ -809,7 +810,15 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
         request_id = str(uuid4())
         started = time.monotonic()
         logger = logging.getLogger("speech_tool.questions")
-        logger.warning("question started request=%s session=%s", request_id, session_id)
+        log_event(
+            logger,
+            logging.INFO,
+            "question started",
+            stage="question",
+            session_id=session_id,
+            request_id=request_id,
+            result="started",
+        )
         try:
             result = draft_question(
                 confusion=confusion,
@@ -821,10 +830,30 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
                 mode=body.mode,
             )
         except ValueError as exc:
-            logger.warning("question invalid request=%s", request_id)
+            log_event(
+                logger,
+                logging.WARNING,
+                "question invalid",
+                stage="question",
+                session_id=session_id,
+                request_id=request_id,
+                result="invalid",
+                error=str(exc),
+            )
             raise HTTPException(400, str(exc))
-        except Exception:
-            logger.warning("question failed request=%s elapsed=%.2f", request_id, time.monotonic() - started)
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.ERROR,
+                "question failed",
+                stage="question",
+                session_id=session_id,
+                request_id=request_id,
+                elapsed_s=time.monotonic() - started,
+                result="error",
+                error=str(exc),
+                exc_info=True,
+            )
             raise HTTPException(502, f"Question generation failed (reference {request_id})")
         if result.version in {
             "timeout",
@@ -833,7 +862,18 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
             "provider_unavailable",
             "model_unavailable",
         } or not result.text.strip():
-            logger.warning("question %s request=%s elapsed=%.2f model=%s", result.version, request_id, time.monotonic() - started, result.model)
+            log_event(
+                logger,
+                logging.WARNING,
+                f"question {result.version}",
+                stage="question",
+                session_id=session_id,
+                request_id=request_id,
+                elapsed_s=time.monotonic() - started,
+                model=result.model,
+                result=result.version,
+                error=getattr(result, "detail", None),
+            )
             provider_down = result.version in {"provider_unavailable", "model_unavailable"}
             raise HTTPException(
                 504 if result.version == "timeout" else 502,
@@ -848,7 +888,17 @@ def create_app(store: EventStore, pipeline: Pipeline | None = None) -> FastAPI:
                 )
                 + f" (reference {request_id})",
             )
-        logger.warning("question ready request=%s elapsed=%.2f model=%s", request_id, time.monotonic() - started, result.model)
+        log_event(
+            logger,
+            logging.INFO,
+            "question ready",
+            stage="question",
+            session_id=session_id,
+            request_id=request_id,
+            elapsed_s=time.monotonic() - started,
+            model=result.model,
+            result="ok",
+        )
         return store.append_question(
             session_id,
             {

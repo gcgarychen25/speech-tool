@@ -7,17 +7,29 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
+import logging
 import math
 import os
+from collections import Counter
 from pathlib import Path
 import re
 import tempfile
 import time
 import urllib.request
 
+from speech_tool.logging_setup import configure_logging, log_event, log_startup
+
 from .archive import archive_one, native_pcm_hash, sha256
 
 GRACE_SECONDS = 14 * 24 * 3600
+
+ROUTINE_RETENTION_STATUSES = {
+    "compressed_or_noncanonical_retained",
+    "archived_original_removed",
+    "grace_period_original_retained",
+    "transcription_not_complete",
+    "playback_service_not_verified_original_retained",
+}
 
 
 def atomic_json(path: Path, value: dict):
@@ -111,6 +123,9 @@ def main():
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--apply', action='store_true')
     args = parser.parse_args()
+    configure_logging(role="retention")
+    log_startup(role="retention")
+    log = logging.getLogger("speech_tool.retention")
     if not args.apply:
         candidates = []
         for path in sorted((args.root / 'events').glob('*/event.json')):
@@ -138,16 +153,52 @@ def main():
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
+            log_event(log, logging.INFO, "retention already running", stage="retention", result="locked")
             return
         failures = 0
+        counts: Counter[str] = Counter()
         for path in sorted((args.root / 'events').glob('*/event.json')):
+            event_id = path.parent.name
             try:
                 row = retain_event(args.root, path.parent, allow_removal=allow_removal)
-                if row['status'] != 'compressed_or_noncanonical_retained':
-                    print(json.dumps(row), flush=True)
+                status = row['status']
+                counts[status] += 1
+                if status not in ROUTINE_RETENTION_STATUSES:
+                    log_event(
+                        log,
+                        logging.INFO,
+                        "retention event",
+                        stage="retention",
+                        event_id=event_id,
+                        result=status,
+                    )
             except Exception as exc:
                 failures += 1
-                print(json.dumps({'event_id': path.parent.name, 'status': 'failed_original_retained', 'error': str(exc)}), flush=True)
+                counts["failed_original_retained"] += 1
+                log_event(
+                    log,
+                    logging.ERROR,
+                    "retention event failed",
+                    stage="retention",
+                    event_id=event_id,
+                    result="failed_original_retained",
+                    error=str(exc),
+                    exc_info=True,
+                )
+        log_event(
+            log,
+            logging.INFO,
+            "retention run complete",
+            stage="retention",
+            result="error" if failures else "ok",
+            events=sum(counts.values()),
+            failed=failures,
+            removed=counts.get("original_removed_lossless_copy_verified", 0),
+            archived=counts.get("archived_original_removed", 0),
+            grace=counts.get("grace_period_original_retained", 0),
+            skipped=counts.get("compressed_or_noncanonical_retained", 0),
+            allow_removal=allow_removal,
+        )
         if failures:
             raise SystemExit(1)
 

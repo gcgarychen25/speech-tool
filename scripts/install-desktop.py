@@ -16,6 +16,46 @@ from datetime import datetime, timezone
 ROOT = Path(__file__).resolve().parents[1]
 LABEL = "com.speechtool.server"
 
+def merge_service_environment(previous_env, release_src, default_path):
+    """Keep operator-set variables; always point PYTHONPATH at this release."""
+    env = dict(previous_env or {})
+    env["PYTHONPATH"] = str(release_src)
+    if not env.get("PATH"):
+        env["PATH"] = default_path
+    return env
+
+
+def git_head(repo, timeout=5):
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    sha = (result.stdout or "").strip()
+    if result.returncode == 0 and len(sha) >= 7 and all(c in "0123456789abcdef" for c in sha):
+        return sha
+    return None
+
+
+def write_release_metadata(release, repo):
+    meta = {
+        "release_id": release.name,
+        "installed_at": datetime.now(timezone.utc).isoformat(),
+        "version": "0.1.0",
+    }
+    commit = git_head(repo)
+    if commit:
+        meta["git_commit"] = commit
+    (release / "RELEASE.json").write_text(json.dumps(meta, indent=2) + "\n")
+    return meta
+
+
 
 def unload_service(domain, label):
     subprocess.run(["launchctl", "bootout", f"{domain}/{label}"], capture_output=True)
@@ -49,16 +89,24 @@ def main():
         signature.update(str(path.relative_to(ROOT)).encode())
         signature.update(path.read_bytes())
     release = runtime / "releases" / signature.hexdigest()[:16]
+    default_path = f"{python.resolve().parent}:{Path.home()}/.opencode/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    previous = plistlib.loads(plist.read_bytes()) if plist.exists() else {}
+    env = merge_service_environment(
+        previous.get("EnvironmentVariables"),
+        release / "src",
+        default_path,
+    )
     config = {
         "Label": LABEL,
         "ProgramArguments": [str(python), "-m", "speech_tool", "--no-open", "--no-replace"],
         "WorkingDirectory": str(release),
         "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 15,
-        "EnvironmentVariables": {"PATH": f"{python.resolve().parent}:{Path.home()}/.opencode/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "PYTHONPATH": str(release / "src")},
+        "EnvironmentVariables": env,
         "StandardOutPath": str(runtime / "server.log"),
         "StandardErrorPath": str(runtime / "server.log"),
     }
-    print(f"Service: {plist}\nLauncher: {app}\nPython: {python}\nLogs: {runtime / 'server.log'}")
+    print(f"Service: {plist}\nLauncher: {app}\nPython: {python}\nLogs: {runtime / 'logs' / 'speech_tool.log'}")
+    print(f"Launchd backstop: {runtime / 'server.log'}")
     print(f"Local release: {release}\nOriginal recordings are not changed. --replace-service restarts only this tool's service.")
     if not args.install:
         return
@@ -75,8 +123,8 @@ def main():
             shutil.copy2(path, dest)
     domain = f"gui/{os.getuid()}"
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    write_release_metadata(release, ROOT)
     if plist.exists():
-        previous = plistlib.loads(plist.read_bytes())
         if previous != config:
             if not args.replace_service or previous.get("Label") != LABEL or "speech_tool" not in previous.get("ProgramArguments", []):
                 sys.exit("Existing service differs; review it and use --replace-service for an approved update.")

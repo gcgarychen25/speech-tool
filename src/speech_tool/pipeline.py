@@ -23,6 +23,9 @@ from speech_tool.polish import Polisher, OpencodePolisher, default_polisher
 from speech_tool.store import EventStore
 from speech_tool.transcript_quality import is_noise_transcript
 from speech_tool.polish_quality import polish_quality_issue
+from speech_tool.logging_setup import log_event
+
+log = logging.getLogger(__name__)
 
 NOTE_POLISH_PRIORITY = 0
 LECTURE_POLISH_PRIORITY = 1
@@ -174,11 +177,25 @@ class Pipeline:
     def recover_and_resume(self) -> None:
         self.store.interrupt_inflight()
         self._catch_up_note_appends()
+        asr_pending = 0
+        polish_pending = 0
         for event_id, kind in self.store.pending_work():
             if kind == "asr":
+                asr_pending += 1
                 self.enqueue_asr(event_id)
             else:
+                polish_pending += 1
                 self.enqueue_polish(event_id)
+        if asr_pending or polish_pending:
+            log_event(
+                log,
+                logging.INFO,
+                "recovered pending work",
+                stage="server",
+                result="ok",
+                asr_pending=asr_pending,
+                polish_pending=polish_pending,
+            )
 
     def _catch_up_note_appends(self) -> None:
         for event in self.store.list_events():
@@ -237,8 +254,33 @@ class Pipeline:
 
     def warmup_asr(self) -> None:
         warmup = getattr(self.asr, "warmup", None)
-        if callable(warmup):
+        if not callable(warmup):
+            return
+        started = time.monotonic()
+        model = getattr(self.asr, "model", None)
+        try:
             warmup()
+        except Exception:
+            log_event(
+                log,
+                logging.ERROR,
+                "asr warmup failed",
+                stage="asr",
+                model=model,
+                elapsed_s=time.monotonic() - started,
+                result="error",
+                exc_info=True,
+            )
+            raise
+        log_event(
+            log,
+            logging.INFO,
+            "asr warmup completed",
+            stage="asr",
+            model=model,
+            elapsed_s=time.monotonic() - started,
+            result="ok",
+        )
 
     def _submit_asr(self, event_id: str, fn: Callable[[], None]) -> None:
         self._submit(event_id, fn, self._asr_queues, self._asr_busy, self._asr_pool)
@@ -357,7 +399,28 @@ class Pipeline:
                 )
                 revision = event.transcript_revision
             self.enqueue_polish(event_id, revision)
+            log_event(
+                log,
+                logging.INFO,
+                "asr append completed",
+                stage="asr",
+                event_id=event_id,
+                model=asr.model,
+                elapsed_s=asr.elapsed_seconds,
+                rtf=asr.rtf,
+                result="ok",
+            )
         except Exception as exc:
+            log_event(
+                log,
+                logging.ERROR,
+                "asr append failed",
+                stage="asr",
+                event_id=event_id,
+                error=str(exc),
+                result="error",
+                exc_info=True,
+            )
             self._update_event(
                 event_id,
                 asr_status="failed",
@@ -375,6 +438,7 @@ class Pipeline:
                 self.enqueue_polish(event_id)
             return
         self._update_event(event_id, asr_status="running", last_error=None)
+        started = time.monotonic()
         try:
             audio = self.store.audio_path(event)
             course_args = {"course": self.store.get_session(event.session_id).course} if event.session_id and isinstance(self.asr, MlxWhisperAsr) else {}
@@ -401,7 +465,33 @@ class Pipeline:
                         event.id,
                         result.text,
                     )
+            log_event(
+                log,
+                logging.INFO,
+                "asr completed",
+                stage="asr",
+                event_id=event_id,
+                session_id=event.session_id,
+                note_id=event.note_id,
+                model=result.model,
+                elapsed_s=result.elapsed_seconds,
+                rtf=result.rtf,
+                result="ok",
+                kind=event.kind,
+            )
         except Exception as exc:
+            log_event(
+                log,
+                logging.ERROR,
+                "asr failed",
+                stage="asr",
+                event_id=event_id,
+                session_id=event.session_id,
+                error=str(exc),
+                elapsed_s=time.monotonic() - started,
+                result="error",
+                exc_info=True,
+            )
             self._update_event(
                 event_id,
                 asr_status="failed",
@@ -446,10 +536,16 @@ class Pipeline:
             detail = self._polish_provider_detail or (
                 "AI cleanup paused after repeated provider failures; raw transcript preserved"
             )
-            logging.getLogger(__name__).warning(
-                "polish event=%s skipped cooldown remaining=%.0fs",
-                event_id,
-                self._polish_cooldown_until - time.monotonic(),
+            log_event(
+                log,
+                logging.WARNING,
+                "polish skipped cooldown",
+                stage="polish",
+                event_id=event_id,
+                session_id=event.session_id,
+                result="provider_unavailable",
+                error=detail,
+                elapsed_s=self._polish_cooldown_until - time.monotonic(),
             )
             with self._commit_lock:
                 event = self.store.get(event_id)
@@ -483,11 +579,25 @@ class Pipeline:
                 if attempt == attempts - 1:
                     break
             finally:
-                logging.getLogger(__name__).log(
-                    logging.WARNING if last_error or (result and result.version in SOFT_POLISH_FAILURES) else logging.INFO,
-                    'polish event=%s attempt=%d elapsed=%.2fs result=%s',
-                    event_id, attempt + 1, time.monotonic() - started,
-                    result.version if result else 'exception',
+                failed = bool(last_error or (result and result.version in SOFT_POLISH_FAILURES))
+                error = None
+                if last_error:
+                    error = str(last_error)
+                elif result is not None:
+                    error = getattr(result, "detail", None)
+                log_event(
+                    log,
+                    logging.WARNING if failed else logging.INFO,
+                    "polish failed" if failed else "polish completed",
+                    stage="polish",
+                    event_id=event_id,
+                    session_id=event.session_id,
+                    model=result.model if result else OPENCODE_MODEL,
+                    elapsed_s=time.monotonic() - started,
+                    result=(result.version if result else "exception"),
+                    attempt=attempt + 1,
+                    error=error,
+                    exc_info=bool(last_error is not None and result is None),
                 )
         detail = None
         if result is not None:

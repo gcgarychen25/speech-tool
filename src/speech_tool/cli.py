@@ -41,10 +41,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    from speech_tool.logging_setup import configure_logging, log_startup
+
+    configure_logging(role="server")
+    log_startup(role="server")
     if args.data_dir:
         os.environ["SPEECH_TOOL_DATA_DIR"] = args.data_dir
 

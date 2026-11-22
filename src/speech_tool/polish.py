@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -17,6 +18,7 @@ from speech_tool.config import (
 )
 
 from speech_tool.lexicon import polish_lexicon_block
+from speech_tool.logging_setup import log_event
 from speech_tool.textnorm import to_simplified
 
 POLISH_PROMPT = """You are cleaning an ASR transcript.
@@ -132,6 +134,22 @@ def _prepare_opencode_env(workspace: Path) -> dict[str, str]:
     return env
 
 
+def _opencode_error_snippet(stdout: str, stderr: str, limit: int = 800) -> str:
+    blob = "\n".join(part.strip() for part in (stderr, stdout) if part and part.strip())
+    if not blob:
+        return ""
+    compact = " ".join(blob.split())
+    compact = re.sub(r"(?i)(bearer\s+)\S+", r"\1[redacted]", compact)
+    compact = re.sub(
+        r"(?i)(authorization|api[_-]?key|token)([\"']?\s*[:=]\s*)\S+",
+        r"\1\2[redacted]",
+        compact,
+    )
+    if len(compact) > limit:
+        return compact[:limit] + "…"
+    return compact
+
+
 def _classify_opencode_failure(stdout: str, stderr: str) -> tuple[str, str]:
     blob = f"{stdout or ''}\n{stderr or ''}"
     lower = blob.lower()
@@ -140,12 +158,17 @@ def _classify_opencode_failure(stdout: str, stderr: str) -> tuple[str, str]:
         or "free tier can only be used" in lower
         or "filesystem.open" in lower
     ):
-        return "provider_unavailable", PROVIDER_UNAVAILABLE_DETAIL
-    if "providermodelnotfound" in lower or "model not found" in lower:
-        return "model_unavailable", MODEL_UNAVAILABLE_DETAIL
-    if "timeout" in lower and "error" in lower:
-        return "timeout", "AI cleanup timed out; raw transcript preserved"
-    return "error", PROVIDER_ERROR_DETAIL
+        version, detail = "provider_unavailable", PROVIDER_UNAVAILABLE_DETAIL
+    elif "providermodelnotfound" in lower or "model not found" in lower:
+        version, detail = "model_unavailable", MODEL_UNAVAILABLE_DETAIL
+    elif "timeout" in lower and "error" in lower:
+        version, detail = "timeout", "AI cleanup timed out; raw transcript preserved"
+    else:
+        version, detail = "error", PROVIDER_ERROR_DETAIL
+    snippet = _opencode_error_snippet(stdout, stderr)
+    if snippet:
+        detail = f"{detail}: {snippet}"
+    return version, detail
 
 
 def run_opencode(prompt: str, timeout: float) -> PolishResult:
@@ -192,7 +215,21 @@ def run_opencode(prompt: str, timeout: float) -> PolishResult:
         )
     version, detail = _classify_opencode_failure(result.stdout or "", result.stderr or "")
     if result.returncode == 0 and version == "error":
-        version, detail = "empty", "AI cleanup returned no text; raw transcript preserved"
+        version = "empty"
+        detail = "AI cleanup returned no text; raw transcript preserved"
+        snippet = _opencode_error_snippet(result.stdout or "", result.stderr or "")
+        if snippet:
+            detail = f"{detail}: {snippet}"
+    log_event(
+        logging.getLogger(__name__),
+        logging.WARNING,
+        "opencode polish failed",
+        stage="polish",
+        model=model,
+        result=version,
+        error=detail,
+        exit_code=result.returncode,
+    )
     return PolishResult(text="", model=model, version=version, detail=detail)
 
 
